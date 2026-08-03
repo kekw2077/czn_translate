@@ -1,0 +1,74 @@
+{
+  "profile": "default",
+
+  "capture": {
+    "source": "wgc",
+    "folder": "testdata/frames",
+    "fps": 2,
+    "processName": "ChaosZeroNightmare",
+    "windowClass": "UnityWndClass",
+    "windowSearchIntervalMs": 2000
+  },
+
+  "detect": {
+    "settleMs": 100,
+    "hashDistanceThreshold": 4,
+    "pollEveryNthFrame": 1
+  },
+
+  "ocr": {
+    "provider": "auto",
+    "adapterIndex": -1,
+    "quantized": false,
+    "modelsDirectory": "models",
+    "det": {
+      "limitSideLen": 960,
+      "threshold": 0.3,
+      "unclipRatio": 1.6,
+      "minArea": 24
+    },
+    "rec": {
+      "height": 48,
+      "batchSize": 8
+    }
+  },
+
+  "lookup": {
+    "databasePath": "czn.db",
+    "fuzzyThreshold": 0.85,
+    "fuzzyThresholdLowConfidence": 0.80,
+    "lowConfidenceCutoff": 0.7,
+    "ftsCandidateLimit": 50,
+    "zoneCacheCapacity": 20000
+  },
+
+  "overlay": {
+    "fontFamily": "Segoe UI",
+    "fontSize": 18,
+    "minFontScale": 0.8,
+    "backdropOpacity": 0.78,
+    "textColor": "#FFF2E8",
+    "backdropColor": "#141014",
+    "debug": false
+  },
+
+  "sync": {
+    "ollamaEndpoint": "http://127.0.0.1:11434",
+    "model": "qwen3-loc",
+    "timeoutSeconds": 3,
+    "maxParallelRequests": 2,
+    "packPath": "",
+    "fallbackEnabled": true
+  },
+
+  "logging": {
+    "level": "Information",
+    "directory": "logs"
+  },
+
+  "zones": [
+    { "id": "dialogue", "rect": [0.15, 0.72, 0.70, 0.20], "priority": 0, "mode": "block" },
+    { "id": "tooltip",  "rect": [0.00, 0.00, 1.00, 1.00], "priority": 1, "mode": "auto" },
+    { "id": "topbar",   "rect": [0.00, 0.00, 1.00, 0.08], "priority": 2, "mode": "line" }
+  ]
+}

@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <!-- NotifyIcon for the tray; WPF has no equivalent. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>CznTranslator.App</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>CznTranslator</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Serilog" Version="4.1.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CznTranslator.Core\CznTranslator.Core.csproj" />
+    <ProjectReference Include="..\CznTranslator.Capture\CznTranslator.Capture.csproj" />
+    <ProjectReference Include="..\CznTranslator.Detect\CznTranslator.Detect.csproj" />
+    <ProjectReference Include="..\CznTranslator.Ocr\CznTranslator.Ocr.csproj" />
+    <ProjectReference Include="..\CznTranslator.Lookup\CznTranslator.Lookup.csproj" />
+    <ProjectReference Include="..\CznTranslator.Overlay\CznTranslator.Overlay.csproj" />
+    <ProjectReference Include="..\CznTranslator.Sync\CznTranslator.Sync.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="config.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

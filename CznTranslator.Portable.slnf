@@ -1,0 +1,13 @@
+{
+  "solution": {
+    "path": "CznTranslator.sln",
+    "projects": [
+      "src\\CznTranslator.Core\\CznTranslator.Core.csproj",
+      "src\\CznTranslator.Detect\\CznTranslator.Detect.csproj",
+      "src\\CznTranslator.Lookup\\CznTranslator.Lookup.csproj",
+      "src\\CznTranslator.Ocr\\CznTranslator.Ocr.csproj",
+      "src\\CznTranslator.Sync\\CznTranslator.Sync.csproj",
+      "tests\\CznTranslator.Tests\\CznTranslator.Tests.csproj"
+    ]
+  }
+}
