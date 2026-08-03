@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>CznTranslator.Ocr</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      DirectML package ONLY. Microsoft.ML.OnnxRuntime must NOT be referenced alongside it:
+      both drop onnxruntime.dll into the output folder and the native DLLs conflict (TZ §1).
+      The CPU execution provider is compiled into this same build and is reached simply by not
+      calling AppendExecutionProvider_DML, so one package covers both backends (TZ §12).
+    -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.19.2" />
+    <PackageReference Include="OpenCvSharp4" Version="4.10.0.20240616" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CznTranslator.Core\CznTranslator.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CznTranslator.Tests" />
+  </ItemGroup>
+
+</Project>

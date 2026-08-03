@@ -16,6 +16,8 @@
     <ProjectReference Include="..\..\src\CznTranslator.Core\CznTranslator.Core.csproj" />
     <ProjectReference Include="..\..\src\CznTranslator.Detect\CznTranslator.Detect.csproj" />
     <ProjectReference Include="..\..\src\CznTranslator.Lookup\CznTranslator.Lookup.csproj" />
+    <ProjectReference Include="..\..\src\CznTranslator.Ocr\CznTranslator.Ocr.csproj" />
+    <ProjectReference Include="..\..\src\CznTranslator.Sync\CznTranslator.Sync.csproj" />
   </ItemGroup>
 
 </Project>
