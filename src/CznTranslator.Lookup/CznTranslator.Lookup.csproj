@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>CznTranslator.Lookup</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Microsoft.Data.Sqlite (not .Core) pulls SQLitePCLRaw.bundle_e_sqlite3, which ships a
+      current SQLite build with FTS5 compiled in. FTS5 trigram needs 3.34+ (TZ §11) and the
+      bundled library is checked at startup by TranslationDatabase.
+    -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+    <PackageReference Include="System.IO.Hashing" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- One schema file for both the app and the Python pipeline. -->
+    <EmbeddedResource Include="..\..\tools\schema.sql" LogicalName="CznTranslator.Lookup.schema.sql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CznTranslator.Core\CznTranslator.Core.csproj" />
+  </ItemGroup>
+
+</Project>

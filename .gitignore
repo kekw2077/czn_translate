@@ -1,0 +1,29 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+artifacts/
+
+## Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+## Runtime data — never commit a built base or a captured frame set
+*.db
+*.db-wal
+*.db-shm
+logs/
+models/*.onnx
+models/*.txt
+testdata/frames/*.png
+out/
+
+## Local overrides
+config.local.json
+tools/.env
