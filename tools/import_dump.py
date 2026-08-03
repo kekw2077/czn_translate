@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Loads an AssetRipper dump into the strings table (TZ §8).
+"""Loads a dump into the strings table (TZ §8).
 
 Run with the game closed.
 
     python import_dump.py --scan --dump ./dump          # propose tables.yaml, then edit it
     python import_dump.py --dump ./dump --db ../czn.db  # import what tables.yaml selects
+
+Two kinds of source feed the same path: an AssetRipper JSON export, and SQLite databases sitting
+in the same folder — loose game master data, or databases carved out of a pack by probe_pack.py.
+The scan proposes both into tables.yaml and everything downstream is unaware of the difference.
 
 The AssetRipper export itself is manual — the tool is GUI-only at present, so this script starts
 from an already-exported folder.
@@ -19,7 +23,12 @@ from pathlib import Path
 
 from czn.db import SRC_PACK, STATUS_NEW, Database
 from czn.dump import load_table_specs, read_dump, write_table_specs
+from czn.probe import identify_file
+from czn.sqlite_source import scan_database
 from czn.tables import scan_directory
+
+# Enough for every magic the prober knows, and cheap over a directory of thousands of files.
+SNIFF_BYTES = 8192
 
 DEFAULT_TABLES = Path(__file__).resolve().parent / "tables.yaml"
 
@@ -32,21 +41,57 @@ def md5_of(path: Path) -> str:
     return digest.hexdigest()
 
 
+def find_databases(dump_dir: Path) -> list[Path]:
+    """Any file whose header says SQLite, whatever its extension.
+
+    Games name master data .bytes, .dat or nothing at all, so going by suffix would miss most of
+    them; the magic is the only reliable signal.
+    """
+    databases = []
+    for path in sorted(p for p in dump_dir.rglob("*") if p.is_file()):
+        if path.suffix.lower() == ".json":
+            continue
+        try:
+            if identify_file(path, window=SNIFF_BYTES).kind == "sqlite3":
+                databases.append(path)
+        except OSError:
+            continue
+
+    return databases
+
+
 def run_scan(dump_dir: Path, tables_path: Path) -> int:
-    candidates = scan_directory(dump_dir)
-    if not candidates:
-        print(f"No JSON with string content found under {dump_dir}", file=sys.stderr)
+    json_candidates = scan_directory(dump_dir)
+
+    sqlite_candidates = []
+    for database in find_databases(dump_dir):
+        sqlite_candidates.extend(scan_database(database))
+
+    if not json_candidates and not sqlite_candidates:
+        print(
+            f"No JSON string tables and no SQLite databases found under {dump_dir}.\n"
+            "Run probe_pack.py against the game directory to see what the files actually are.",
+            file=sys.stderr,
+        )
         return 1
 
-    write_table_specs(tables_path, candidates)
+    write_table_specs(tables_path, json_candidates, sqlite_candidates)
 
-    included = sum(1 for candidate in candidates if candidate.include)
-    print(f"Scanned {dump_dir}: {len(candidates)} candidate tables, {included} proposed for import.")
+    total = len(json_candidates) + len(sqlite_candidates)
+    included = sum(1 for c in json_candidates if c.include) + sum(1 for c in sqlite_candidates if c.include)
+    print(f"Scanned {dump_dir}: {total} candidate table(s), {included} proposed for import.")
     print(f"Wrote {tables_path}. Review it by hand before importing.")
 
-    for candidate in candidates[:15]:
+    for candidate in json_candidates[:12]:
         mark = "+" if candidate.include else "-"
-        print(f"  {mark} {candidate.file}:{candidate.path} — {candidate.entries} entries, {candidate.reason}")
+        print(f"  {mark} json   {candidate.file}:{candidate.path} — {candidate.entries} entries, {candidate.reason}")
+
+    for candidate in sqlite_candidates[:12]:
+        mark = "+" if candidate.include else "-"
+        print(
+            f"  {mark} sqlite {candidate.file}:{candidate.table}.{candidate.text_column} — "
+            f"{candidate.rows} rows, {candidate.reason}"
+        )
 
     return 0
 
