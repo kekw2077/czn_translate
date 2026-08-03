@@ -50,7 +50,7 @@ public sealed class OverlayRenderer : IDisposable
         _d3dDevice = D3D11.D3D11CreateDevice(
             DriverType.Hardware,
             DeviceCreationFlags.BgraSupport,
-            [FeatureLevel.Level_11_1, FeatureLevel.Level_11_0]);
+            [Vortice.Direct3D.FeatureLevel.Level_11_1, Vortice.Direct3D.FeatureLevel.Level_11_0]);
 
         _dxgiDevice = _d3dDevice.QueryInterface<IDXGIDevice>();
 
@@ -59,7 +59,7 @@ public sealed class OverlayRenderer : IDisposable
         _d2dContext = _d2dDevice.CreateDeviceContext(DeviceContextOptions.None);
 
         _compositionDevice = DComp.DCompositionCreateDevice<IDCompositionDevice>(_dxgiDevice);
-        _compositionTarget = _compositionDevice.CreateTargetForHwnd(windowHandle, topmost: true);
+        _compositionDevice.CreateTargetForHwnd(windowHandle, true, out _compositionTarget);
         _visual = _compositionDevice.CreateVisual();
         _compositionTarget.SetRoot(_visual);
 
@@ -83,6 +83,7 @@ public sealed class OverlayRenderer : IDisposable
     private IDWriteTextFormat CreateTextFormat(OverlaySection settings) =>
         _writeFactory.CreateTextFormat(
             settings.FontFamily,
+            null!,
             FontWeight.SemiBold,
             Vortice.DirectWrite.FontStyle.Normal,
             FontStretch.Normal,
@@ -107,10 +108,9 @@ public sealed class OverlayRenderer : IDisposable
 
         EnsureSurface(width, height);
 
-        var surfacePointer = _surface!.BeginDraw(null, out var offset);
+        using var texture = _surface!.BeginDraw<ID3D11Texture2D>(null, out var offset);
         try
         {
-            using var texture = new ID3D11Texture2D(surfacePointer);
             using var dxgiSurface = texture.QueryInterface<IDXGISurface>();
             using var bitmap = _d2dContext.CreateBitmapFromDxgiSurface(dxgiSurface, new BitmapProperties1
             {
@@ -120,7 +120,7 @@ public sealed class OverlayRenderer : IDisposable
 
             _d2dContext.Target = bitmap;
             _d2dContext.BeginDraw();
-            _d2dContext.Transform = Matrix3x2.CreateTranslation(offset.X, offset.Y);
+            _d2dContext.Transform = System.Numerics.Matrix3x2.CreateTranslation(offset.X, offset.Y);
 
             // Fully transparent everywhere we do not draw — the game has to show through.
             _d2dContext.Clear(new Color4(0, 0, 0, 0));
@@ -158,6 +158,55 @@ public sealed class OverlayRenderer : IDisposable
         _compositionDevice.Commit();
     }
 
+    /// <summary>
+    /// Draws a plain labelled border filling the overlay — the M1 milestone's "rectangle over the
+    /// game window" and a standing diagnostic. It exercises the whole present path (DComp surface,
+    /// D2D bitmap target, DirectWrite) without needing OCR, the database, or any zones, so it is
+    /// also the cheapest way to prove the device stack came up on a given machine.
+    /// </summary>
+    public void DrawDiagnosticFrame(int width, int height, string label)
+    {
+        if (width <= 0 || height <= 0)
+            return;
+
+        EnsureSurface(width, height);
+
+        using var texture = _surface!.BeginDraw<ID3D11Texture2D>(null, out var offset);
+        try
+        {
+            using var dxgiSurface = texture.QueryInterface<IDXGISurface>();
+            using var bitmap = _d2dContext.CreateBitmapFromDxgiSurface(dxgiSurface, new BitmapProperties1
+            {
+                PixelFormat = new Vortice.DCommon.PixelFormat(Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied),
+                BitmapOptions = BitmapOptions.Target | BitmapOptions.CannotDraw
+            });
+
+            _d2dContext.Target = bitmap;
+            _d2dContext.BeginDraw();
+            _d2dContext.Transform = System.Numerics.Matrix3x2.CreateTranslation(offset.X, offset.Y);
+            _d2dContext.Clear(new Color4(0, 0, 0, 0));
+
+            using var border = _d2dContext.CreateSolidColorBrush(new Color4(0.2f, 1f, 0.4f, 0.95f));
+            using var backdrop = _d2dContext.CreateSolidColorBrush(new Color4(0.08f, 0.06f, 0.08f, 0.55f));
+
+            // Inset by the stroke half-width so the border is not clipped at the surface edge.
+            _d2dContext.DrawRectangle(new Rect(2, 2, width - 4, height - 4), border, 3f);
+
+            var labelWidth = Math.Min(width - 16, 420);
+            _d2dContext.FillRectangle(new Rect(8, 8, labelWidth, 30), backdrop);
+            _d2dContext.DrawText(label, _textFormat, new Rect(14, 10, labelWidth + 6, 40), border);
+
+            _d2dContext.EndDraw();
+            _d2dContext.Target = null;
+        }
+        finally
+        {
+            _surface.EndDraw();
+        }
+
+        _compositionDevice.Commit();
+    }
+
     private void DrawLine(
         TranslatedLine line,
         PixelRect zoneOrigin,
@@ -179,6 +228,7 @@ public sealed class OverlayRenderer : IDisposable
 
         using var format = _writeFactory.CreateTextFormat(
             _settings.FontFamily,
+            null!,
             FontWeight.SemiBold,
             Vortice.DirectWrite.FontStyle.Normal,
             FontStretch.Normal,
@@ -209,10 +259,11 @@ public sealed class OverlayRenderer : IDisposable
         _surfaceWidth = width;
         _surfaceHeight = height;
 
-        _surface = _compositionDevice.CreateSurface(
+        _compositionDevice.CreateSurface(
             (uint)width, (uint)height,
             Format.B8G8R8A8_UNorm,
-            Vortice.DXGI.AlphaMode.Premultiplied);
+            Vortice.DXGI.AlphaMode.Premultiplied,
+            out _surface);
 
         _visual.SetContent(_surface);
         _compositionDevice.Commit();
@@ -266,6 +317,7 @@ internal sealed class DirectWriteMeasurer(IDWriteFactory factory, OverlaySection
 
         using var format = factory.CreateTextFormat(
             settings.FontFamily,
+            null!,
             FontWeight.SemiBold,
             Vortice.DirectWrite.FontStyle.Normal,
             FontStretch.Normal,

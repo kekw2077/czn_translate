@@ -1,4 +1,5 @@
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Threading;
 using CznTranslator.Capture;
@@ -12,13 +13,17 @@ using CznTranslator.Sync;
 using Serilog;
 using Serilog.Events;
 
+// Both UseWPF and UseWindowsForms are on (the tray needs NotifyIcon), so the unqualified name is
+// ambiguous. Every dialog here is WPF's — MessageBoxButton/MessageBoxImage are WPF-only types.
+using MessageBox = System.Windows.MessageBox;
+
 namespace CznTranslator.App;
 
 /// <summary>
 /// Startup, teardown, and the tray. The order here follows §4 and §11: models are warmed before
 /// the overlay appears, so the first translation of a session is not mistaken for a hang.
 /// </summary>
-public partial class App : Application
+public partial class App : System.Windows.Application
 {
     private ConfigService? _configService;
     private TranslationPipeline? _pipeline;
@@ -40,21 +45,189 @@ public partial class App : Application
 
         _shutdown = new CancellationTokenSource();
 
+        // M1 diagnostic mode (§10): overlay + window tracking + a rectangle, without OCR/DB/pipeline.
+        // Lets the milestone be exercised on a real machine before the models and database exist.
+        var m1 = e.Args.Any(arg => string.Equals(arg, "--m1", StringComparison.OrdinalIgnoreCase));
+
+        // A frame budget means the run is non-interactive; a modal error box would hang it, so on
+        // failure we log and exit instead of blocking on a dialog nobody can dismiss.
+        var headless = m1 && e.Args.Any(arg => string.Equals(arg, "--frames", StringComparison.OrdinalIgnoreCase));
+
         try
         {
-            await StartAsync(_shutdown.Token);
+            if (m1)
+                await RunM1DiagnosticAsync(e.Args, _shutdown.Token);
+            else
+                await StartAsync(_shutdown.Token);
         }
         catch (Exception ex)
         {
             Log.Fatal(ex, "Startup failed.");
-            MessageBox.Show(
-                $"Не удалось запустить переводчик:\n\n{ex.Message}",
-                "CZN Translator",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
+            if (!headless)
+            {
+                MessageBox.Show(
+                    $"Не удалось запустить переводчик:\n\n{ex.Message}",
+                    "CZN Translator",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
             Shutdown(1);
         }
     }
+
+    /// <summary>
+    /// M1: put a click-through rectangle over the game window and keep it glued there (§6, §10).
+    /// Deliberately skips the database, the models and the OCR pipeline — it exists to prove the
+    /// overlay, the DirectComposition device stack and the window tracker work on real hardware,
+    /// which is the whole content of the M1 milestone. Pass <c>--frames N</c> to run headless for a
+    /// fixed number of frames and exit, so it can be checked without a human watching the screen.
+    /// </summary>
+    private async Task RunM1DiagnosticAsync(string[] args, CancellationToken cancellationToken)
+    {
+        var configPath = Path.Combine(AppContext.BaseDirectory, "config.json");
+        _configService = new ConfigService(configPath);
+        var config = _configService.Current;
+
+        ConfigureLogging(config.Logging);
+        Log.Information("M1 diagnostic: overlay + window tracking + rectangle, no OCR/DB/pipeline.");
+
+        int? frameBudget = null;
+        var framesFlag = Array.FindIndex(args, a => string.Equals(a, "--frames", StringComparison.OrdinalIgnoreCase));
+        if (framesFlag >= 0 && framesFlag + 1 < args.Length && int.TryParse(args[framesFlag + 1], out var parsed))
+            frameBudget = parsed;
+
+        // Follow the game if it is up; otherwise sit on whatever window is in front, so the whole
+        // path still runs and can be seen even with the game closed.
+        var target = new WindowFinder().Find(config.Capture);
+        nint targetHandle;
+        int targetProcessId;
+
+        if (target is not null)
+        {
+            targetHandle = target.Handle;
+            targetProcessId = target.ProcessId;
+            Log.Information("Following the game window: {Class} '{Title}' (pid {Pid}).",
+                target.ClassName, target.Title, target.ProcessId);
+        }
+        else
+        {
+            targetHandle = GetForegroundWindow();
+            _ = GetWindowThreadProcessId(targetHandle, out var pid);
+            targetProcessId = (int)pid;
+            Log.Warning(
+                "Game window ({Process}/{Class}) not found; following the foreground window for the diagnostic.",
+                config.Capture.ProcessName, config.Capture.WindowClass);
+        }
+
+        _overlayWindow = new OverlayWindow();
+        _renderer = new OverlayRenderer(_overlayWindow.Handle, config.Overlay);
+        Log.Information("Overlay window and DirectComposition device stack are up (hwnd {Handle:X}).", _overlayWindow.Handle);
+
+        VerifyOverlayExStyle(_overlayWindow.Handle);
+
+        if (targetHandle != nint.Zero)
+        {
+            _tracker = new TargetWindowTracker(targetHandle, targetProcessId);
+            _tracker.Changed += (_, state) => Dispatcher.BeginInvoke(() => OnTargetWindowChanged(state));
+            OnTargetWindowChanged(_tracker.Current);
+        }
+        else
+        {
+            _overlayWindow.SetBounds(new Core.Models.PixelRect(80, 80, 900, 240));
+            _overlayWindow.Show();
+            Log.Warning("No target window handle; showing the diagnostic rectangle at a fixed position.");
+        }
+
+        // A tray icon is the only way to quit an overlay launched from a shortcut: the overlay
+        // window is click-through and cannot take focus, so there is nothing to Alt+F4. Skipped on
+        // headless (--frames) runs, which exit on their own.
+        if (frameBudget is null)
+        {
+            _tray = new TrayIcon("M1 диагностика · оверлей");
+            _tray.ExitRequested += (_, _) => Shutdown();
+            _tray.ToggleRequested += (_, _) => ToggleOverlay();
+        }
+
+        var frames = 0;
+        var totalFrames = 0L;
+        var fpsWindow = System.Diagnostics.Stopwatch.StartNew();
+
+        // Drives the redraw. The surface is updated even while hidden — harmless, and it keeps the
+        // fps measurement honest rather than reading zero whenever the target is not in front.
+        _housekeeping = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(8) };
+        _housekeeping.Tick += (_, _) =>
+        {
+            _tracker?.Poll();
+
+            var bounds = _overlayWindow!.Bounds;
+            if (bounds.Width > 0 && bounds.Height > 0)
+            {
+                _renderer!.DrawDiagnosticFrame(
+                    bounds.Width, bounds.Height,
+                    $"CZN M1 · {bounds.Width}×{bounds.Height} · click-through");
+            }
+
+            frames++;
+            totalFrames++;
+
+            if (fpsWindow.Elapsed.TotalSeconds >= 1)
+            {
+                Log.Information("M1 draw {Fps} fps (visible={Visible}, bounds={Bounds}).",
+                    frames, _overlayWindow.IsVisible, _overlayWindow.Bounds);
+                frames = 0;
+                fpsWindow.Restart();
+            }
+
+            if (frameBudget is int budget && totalFrames >= budget)
+            {
+                Log.Information("M1 diagnostic reached the {Budget}-frame budget; exiting.", budget);
+                Shutdown(0);
+            }
+        };
+        _housekeeping.Start();
+
+        await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Confirms the overlay actually carries the click-through / topmost extended styles §6 asks
+    /// for. CreateWindowEx can silently drop styles, and "click-through" is an M1 acceptance
+    /// criterion, so it is worth asserting rather than assuming.
+    /// </summary>
+    private static void VerifyOverlayExStyle(nint hwnd)
+    {
+        const int GwlExStyle = -20;
+        const long WsExLayered = 0x00080000;
+        const long WsExTransparent = 0x00000020;
+        const long WsExTopMost = 0x00000008;
+        const long WsExNoActivate = 0x08000000;
+
+        var exStyle = (long)GetWindowLongPtr(hwnd, GwlExStyle);
+        var required = WsExLayered | WsExTransparent | WsExTopMost | WsExNoActivate;
+        var missing = required & ~exStyle;
+
+        if (missing == 0)
+        {
+            Log.Information(
+                "Overlay ex-style OK (0x{Ex:X}): layered + transparent (click-through) + topmost + no-activate.",
+                exStyle);
+        }
+        else
+        {
+            Log.Warning(
+                "Overlay ex-style is missing bits 0x{Missing:X} (have 0x{Ex:X}); click-through/topmost may not hold.",
+                missing, exStyle);
+        }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern nint GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(nint hWnd, out uint processId);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    private static extern nint GetWindowLongPtr(nint hWnd, int index);
 
     private async Task StartAsync(CancellationToken cancellationToken)
     {

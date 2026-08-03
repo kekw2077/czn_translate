@@ -34,17 +34,21 @@
 | `CznTranslator.Lookup` | net8.0 | да | да |
 | `CznTranslator.Ocr` | net8.0 | да | да (кроме инференса) |
 | `CznTranslator.Sync` | net8.0 | да | да |
-| `CznTranslator.Capture` | net8.0-windows10.0.22621.0 | **нет** | нет |
-| `CznTranslator.Overlay` | net8.0-windows | **нет** | нет |
-| `CznTranslator.App` | net8.0-windows10.0.22621.0 (WPF) | **нет** | нет |
+| `CznTranslator.Capture` | net8.0-windows10.0.22621.0 | да | нет |
+| `CznTranslator.Overlay` | net8.0-windows | да | нет |
+| `CznTranslator.App` | net8.0-windows10.0.22621.0 (WPF) | да | нет |
 | `tools/` (Python 3.11) | — | да | да |
 
 230 тестов xunit и 186 pytest — зелёные.
 
-**Windows-часть (Capture, Overlay, App) написана, но ни разу не компилировалась.** Она создавалась
-в Linux-окружении, где нет ни Windows SDK, ни WinRT-проекций, ни DirectX. Считать её каркасом с
-проработанной структурой и специфику из ТЗ на своих местах — но первая сборка на Windows почти
-наверняка потребует правок в interop. Портируемая половина, наоборот, собрана и покрыта тестами.
+**Windows-часть (Capture, Overlay, App) теперь компилируется на Windows, но ещё ни разу не
+запускалась.** Она создавалась в Linux-окружении, где нет ни Windows SDK, ни WinRT-проекций, ни
+DirectX, и первая сборка ожидаемо потребовала правок interop под Vortice 3.6.2: сигнатуры
+`CreateTextFormat`/`CreateSurface`/`CreateTargetForHwnd` с out-параметрами, генерик `BeginDraw<T>`,
+`uint`-параметры D3D11 (`Dispatch`, `CreateBuffer`, `EnumAdapters1`), `Box` из `Vortice.Mathematics`,
+плюс разведение неоднозначности `Application`/`MessageBox` между WPF и WinForms. Считать её каркасом
+с проработанной структурой; отрисовка, захват и слежение за окном пока не проверены на живой игре.
+Портируемая половина, как и раньше, собрана и покрыта тестами.
 
 ## Сборка
 

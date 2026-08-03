@@ -48,7 +48,7 @@ public sealed class WindowFinder(ILogger? log = null)
             if (!IsWindowVisible(handle))
                 return true;
 
-            _ = GetWindowThreadProcessId(handle, out var processId);
+            GetWindowThreadProcessId(handle, out var processId);
             if (!processIds.Contains((int)processId))
                 return true;
 

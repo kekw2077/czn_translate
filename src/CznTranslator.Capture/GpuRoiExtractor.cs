@@ -103,7 +103,7 @@ public sealed class GpuRoiExtractor : IDisposable
         _shader = device.CreateComputeShader(compiled.Span);
 
         _constants = device.CreateBuffer(
-            Marshal.SizeOf<ShaderParams>(),
+            (uint)Marshal.SizeOf<ShaderParams>(),
             BindFlags.ConstantBuffer,
             ResourceUsage.Default);
     }
@@ -142,7 +142,7 @@ public sealed class GpuRoiExtractor : IDisposable
             _context.CSSetUnorderedAccessView(0, _outputView);
             _context.CSSetConstantBuffer(0, _constants);
 
-            _context.Dispatch((outputWidth + 7) / 8, (outputHeight + 7) / 8, 1);
+            _context.Dispatch((uint)((outputWidth + 7) / 8), (uint)((outputHeight + 7) / 8), 1);
 
             // Unbind before the copy: a resource cannot be a UAV and a copy source at once.
             _context.CSSetUnorderedAccessView(0, null);

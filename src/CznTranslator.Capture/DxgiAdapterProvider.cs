@@ -17,7 +17,7 @@ public sealed class DxgiAdapterProvider : IGraphicsAdapterProvider
 
         for (var index = 0; ; index++)
         {
-            if (factory.EnumAdapters1(index, out var adapter).Failure)
+            if (factory.EnumAdapters1((uint)index, out var adapter).Failure)
                 break;
 
             using (adapter)
