@@ -1,0 +1,9 @@
+# Offline conveyor (TZ §8). The desktop app needs none of this.
+#
+# xxhash must produce the same 64-bit values as System.IO.Hashing.XxHash64 on the C# side —
+# tools/tests/normalization_vectors.json is the pin that proves it.
+xxhash>=3.4
+PyYAML>=6.0
+
+# Tests only
+pytest>=8.0

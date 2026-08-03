@@ -1,0 +1,125 @@
+{
+  "comment": "Generated cross-language fixture. Asserted by both tests/CznTranslator.Tests and tools/tests.",
+  "vectors": [
+    {
+      "input": "Blood Pact",
+      "norm": "8100d pact",
+      "normHash": 105289651761184820,
+      "normUnfolded": "blood pact"
+    },
+    {
+      "input": "<color=#ff0000>Blood Pact</color>",
+      "norm": "8100d pact",
+      "normHash": 105289651761184820,
+      "normUnfolded": "blood pact"
+    },
+    {
+      "input": "Deal {0} damage to {target}",
+      "norm": "dea1 {0} damage t0 {target}",
+      "normHash": 3294983836278738687,
+      "normUnfolded": "deal {0} damage to {target}"
+    },
+    {
+      "input": "Restores %s health over %1$d turns",
+      "norm": "re5t0re5 %s hea1th 0ver %1$d turn5",
+      "normHash": -7373434236658991746,
+      "normUnfolded": "restores %s health over %1$d turns"
+    },
+    {
+      "input": "Don't panic — it's just a boss",
+      "norm": "d0nt pan1c 1t5 ju5t a 8055",
+      "normHash": 613223644360020304,
+      "normUnfolded": "dont panic its just a boss"
+    },
+    {
+      "input": "HP/MP",
+      "norm": "hp mp",
+      "normHash": -5648932836264195861,
+      "normUnfolded": "hp mp"
+    },
+    {
+      "input": "Summon a skeletal warrior",
+      "norm": "5umm0n a 5ke1eta1 warr10r",
+      "normHash": -3981522651801892233,
+      "normUnfolded": "summon a skeletal warrior"
+    },
+    {
+      "input": "Line one\\nLine two",
+      "norm": "11ne 0ne 11ne tw0",
+      "normHash": -7268210996547507827,
+      "normUnfolded": "line one line two"
+    },
+    {
+      "input": "  Mixed   SPACING\ttabs ",
+      "norm": "m1xed 5pac1ng ta85",
+      "normHash": 5835335617658689821,
+      "normUnfolded": "mixed spacing tabs"
+    },
+    {
+      "input": "Item x12 (rare)",
+      "norm": "1tem x12 rare",
+      "normHash": -522313708808969767,
+      "normUnfolded": "item x12 rare"
+    },
+    {
+      "input": "<b>Bold</b> and <sprite=4> icons",
+      "norm": "801d and 1c0n5",
+      "normHash": -5933923048507157695,
+      "normUnfolded": "bold and icons"
+    },
+    {
+      "input": "",
+      "norm": "",
+      "normHash": -1205034819632174695,
+      "normUnfolded": ""
+    },
+    {
+      "input": "   ",
+      "norm": "",
+      "normHash": -1205034819632174695,
+      "normUnfolded": ""
+    },
+    {
+      "input": "12345",
+      "norm": "12345",
+      "normHash": -4110991663024418890,
+      "normUnfolded": "12345"
+    },
+    {
+      "input": "Кровавый пакт",
+      "norm": "кровавый пакт",
+      "normHash": 5024054375095330354,
+      "normUnfolded": "кровавый пакт"
+    },
+    {
+      "input": "IlOo1S5B8",
+      "norm": "110015588",
+      "normHash": -6060296618593515492,
+      "normUnfolded": "iloo1s5b8"
+    },
+    {
+      "input": "{0}/{1}",
+      "norm": "{0} {1}",
+      "normHash": -1845978830637890226,
+      "normUnfolded": "{0} {1}"
+    },
+    {
+      "input": "Level 10 — Abyssal Gate",
+      "norm": "1eve1 10 a8y55a1 gate",
+      "normHash": -1300886666041208542,
+      "normUnfolded": "level 10 abyssal gate"
+    },
+    {
+      "input": "a",
+      "norm": "a",
+      "normHash": -3292477735350538661,
+      "normUnfolded": "a"
+    },
+    {
+      "input": "The quick brown fox jumps over the lazy dog",
+      "norm": "the qu1ck 8r0wn f0x jump5 0ver the 1azy d0g",
+      "normHash": -5428884706397549636,
+      "normUnfolded": "the quick brown fox jumps over the lazy dog"
+    }
+  ]
+}

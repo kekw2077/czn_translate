@@ -13,6 +13,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Cross-language normalization fixture, asserted here and by tools/tests. -->
+    <Content Include="..\..\tools\tests\normalization_vectors.json"
+             Link="normalization_vectors.json"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\CznTranslator.Core\CznTranslator.Core.csproj" />
     <ProjectReference Include="..\..\src\CznTranslator.Detect\CznTranslator.Detect.csproj" />
     <ProjectReference Include="..\..\src\CznTranslator.Lookup\CznTranslator.Lookup.csproj" />

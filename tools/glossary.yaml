@@ -1,0 +1,70 @@
+# Glossary for the offline conveyor (TZ §8).
+#
+# Injected verbatim into the system prompt and mirrored into the `glossary` table on every
+# translate.py run. Keep proper nouns in their base form — the prompt tells the model not to
+# decline them, which only works if the entry here is the base form to begin with.
+#
+# locked: true marks a term that must never be re-decided by a model. It has no effect on the
+# prompt itself; it is a signal for reviewers and for future tooling.
+
+terms:
+  Chaos Zero Nightmare:
+    ru: Chaos Zero Nightmare
+    locked: true
+    note: Название игры не переводится
+
+  Nightmare:
+    ru: Кошмар
+  Chaos:
+    ru: Хаос
+  Abyss:
+    ru: Бездна
+
+  # Interface
+  Inventory:
+    ru: Инвентарь
+  Settings:
+    ru: Настройки
+  Confirm:
+    ru: Подтвердить
+  Cancel:
+    ru: Отмена
+  Equip:
+    ru: Экипировать
+  Upgrade:
+    ru: Улучшить
+  Reroll:
+    ru: Перебросить
+
+  # Combat vocabulary — these repeat across hundreds of strings, so a single wording matters
+  Damage:
+    ru: Урон
+  Health:
+    ru: Здоровье
+  Shield:
+    ru: Щит
+  Cooldown:
+    ru: Перезарядка
+  Critical Hit:
+    ru: Критический удар
+  Status Effect:
+    ru: Эффект состояния
+  Buff:
+    ru: Усиление
+  Debuff:
+    ru: Ослабление
+
+  # Roguelike structure
+  Run:
+    ru: Забег
+    note: В смысле прохождения, не "бег"
+  Floor:
+    ru: Этаж
+  Relic:
+    ru: Реликвия
+  Curse:
+    ru: Проклятие
+  Boss:
+    ru: Босс
+  Elite:
+    ru: Элитный враг
