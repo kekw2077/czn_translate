@@ -38,6 +38,10 @@ public partial class App : System.Windows.Application
     private DispatcherTimer? _housekeeping;
     private CancellationTokenSource? _shutdown;
 
+    private TranslationDatabase? _database;
+    private string? _configPath;
+    private SettingsWindow? _settingsWindow;
+
     private bool _overlayEnabled = true;
 
     protected override async void OnStartup(StartupEventArgs e)
@@ -51,6 +55,7 @@ public partial class App : System.Windows.Application
         var m1 = e.Args.Any(arg => string.Equals(arg, "--m1", StringComparison.OrdinalIgnoreCase));
         var m2 = e.Args.Any(arg => string.Equals(arg, "--m2", StringComparison.OrdinalIgnoreCase));
         var framesTest = e.Args.Any(arg => string.Equals(arg, "--frames-test", StringComparison.OrdinalIgnoreCase));
+        var settingsOnly = e.Args.Any(arg => string.Equals(arg, "--settings", StringComparison.OrdinalIgnoreCase));
 
         // Non-interactive runs (the benchmarks, the frame regression, or an M1 run with a frame
         // budget) exit on their own; a modal error box would hang them, so on failure we log and
@@ -65,6 +70,8 @@ public partial class App : System.Windows.Application
                 await RunFramesTestAsync(e.Args, _shutdown.Token);
             else if (m1)
                 await RunM1DiagnosticAsync(e.Args, _shutdown.Token);
+            else if (settingsOnly)
+                RunSettingsOnly();
             else
                 await StartAsync(_shutdown.Token);
         }
@@ -440,6 +447,7 @@ public partial class App : System.Windows.Application
     private async Task StartAsync(CancellationToken cancellationToken)
     {
         var configPath = Path.Combine(AppContext.BaseDirectory, "config.json");
+        _configPath = configPath;
         _configService = new ConfigService(configPath);
         var config = _configService.Current;
 
@@ -449,6 +457,7 @@ public partial class App : System.Windows.Application
         var databasePath = Path.Combine(AppContext.BaseDirectory, config.Lookup.DatabasePath);
         var database = new TranslationDatabase(databasePath);
         database.EnsureCreated();
+        _database = database;
 
         _metrics = new MetricsCollector();
         _metricsStore = new SqliteMetricsStore(database);
@@ -501,6 +510,7 @@ public partial class App : System.Windows.Application
         _tray = new TrayIcon(ocr.Info.ToString());
         _tray.ExitRequested += (_, _) => Shutdown();
         _tray.ToggleRequested += (_, _) => ToggleOverlay();
+        _tray.SettingsRequested += (_, _) => Dispatcher.BeginInvoke(() => OpenSettings());
 
         _configService.Changed += (_, args) => Dispatcher.BeginInvoke(() => OnConfigChanged(args));
 
@@ -676,6 +686,55 @@ public partial class App : System.Windows.Application
         }
 
         _tray?.SetEnabled(_overlayEnabled);
+    }
+
+    /// <summary>
+    /// <c>--settings</c>: open the native settings window on its own (config + database, no overlay
+    /// or OCR pipeline), so it can be built and used without the game running. Closing it exits.
+    /// </summary>
+    private void RunSettingsOnly()
+    {
+        _configPath = Path.Combine(AppContext.BaseDirectory, "config.json");
+        _configService = new ConfigService(_configPath);
+        ConfigureLogging(_configService.Current.Logging);
+        Log.Information("Settings-only mode: native settings window, no overlay/pipeline.");
+
+        OpenDatabase(_configService.Current);
+
+        var window = OpenSettings();
+        window.Closed += (_, _) => Shutdown(0);
+    }
+
+    /// <summary>Opens the settings window, or brings the existing one to the front.</summary>
+    private SettingsWindow OpenSettings()
+    {
+        if (_settingsWindow is not null)
+        {
+            _settingsWindow.Activate();
+            return _settingsWindow;
+        }
+
+        var repository = _database is not null ? new StringRepository(_database) : null;
+        _settingsWindow = new SettingsWindow(_configService!, repository, _configPath!);
+        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        _settingsWindow.Show();
+        return _settingsWindow;
+    }
+
+    private void OpenDatabase(AppConfig config)
+    {
+        try
+        {
+            var dbPath = Path.Combine(AppContext.BaseDirectory, config.Lookup.DatabasePath);
+            var database = new TranslationDatabase(dbPath);
+            database.EnsureCreated();
+            _database = database;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Database unavailable; the settings dashboard will be empty.");
+            _database = null;
+        }
     }
 
     private static void ConfigureLogging(LoggingSection settings)

@@ -22,6 +22,8 @@ public sealed class StringRepository(TranslationDatabase database)
 {
     private readonly TranslationDatabase _database = database ?? throw new ArgumentNullException(nameof(database));
 
+    public TranslationDatabase Database => _database;
+
     public long Upsert(
         string english,
         string? russian,
@@ -100,6 +102,22 @@ public sealed class StringRepository(TranslationDatabase database)
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT COUNT(*) FROM strings;";
         return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    /// <summary>Raw <c>status → count</c> over the whole table, for the settings dashboard.</summary>
+    public IReadOnlyDictionary<string, int> StatusCounts()
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT status, COUNT(*) FROM strings GROUP BY status;";
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            counts[reader.GetString(0)] = reader.GetInt32(1);
+
+        return counts;
     }
 
     private static StringRow Read(SqliteDataReader reader) =>

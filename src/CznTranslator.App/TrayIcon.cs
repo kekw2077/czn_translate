@@ -22,6 +22,9 @@ public sealed class TrayIcon : IDisposable
         _toggleItem = new ToolStripMenuItem("Оверлей включён");
         _toggleItem.Click += (_, _) => ToggleRequested?.Invoke(this, EventArgs.Empty);
 
+        var settingsItem = new ToolStripMenuItem("Настройки…");
+        settingsItem.Click += (_, _) => SettingsRequested?.Invoke(this, EventArgs.Empty);
+
         var backendItem = new ToolStripMenuItem(backendDescription) { Enabled = false };
         var exitItem = new ToolStripMenuItem("Выход");
         exitItem.Click += (_, _) => ExitRequested?.Invoke(this, EventArgs.Empty);
@@ -31,6 +34,7 @@ public sealed class TrayIcon : IDisposable
         menu.Items.Add(backendItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_toggleItem);
+        menu.Items.Add(settingsItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(exitItem);
 
@@ -45,6 +49,7 @@ public sealed class TrayIcon : IDisposable
 
     public event EventHandler? ExitRequested;
     public event EventHandler? ToggleRequested;
+    public event EventHandler? SettingsRequested;
 
     /// <summary>
     /// Coverage is the number that matters (§9): a drop below 90% after a patch means the base
