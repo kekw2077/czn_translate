@@ -31,7 +31,9 @@ public partial class SettingsWindow : Window
     private readonly ConfigService _config;
     private readonly StringRepository? _repository;
     private readonly string _configPath;
+    private readonly SecretStore _secrets = new();
     private StackPanel[] _pages = [];
+    private string _keyProvider = "anthropic";
 
     public SettingsWindow(ConfigService config, StringRepository? repository, string configPath)
     {
@@ -44,6 +46,8 @@ public partial class SettingsWindow : Window
 
         LoadOverlayFields();
         LoadDashboard();
+        SetKeyProvider("anthropic");
+        RefreshKeyStatus();
         Footer.Text = $"База: {Path.GetFileName(_repository?.Database.DatabasePath ?? "нет")}";
     }
 
@@ -57,6 +61,8 @@ public partial class SettingsWindow : Window
 
         if (Nav.SelectedIndex == 0)
             LoadDashboard();
+        else if (Nav.SelectedIndex == 2)
+            RefreshKeyStatus();
     }
 
     // ---------------------------------------------------------------- dashboard
@@ -204,6 +210,50 @@ public partial class SettingsWindow : Window
     }
 
     private void Warn(string message) => OverlayHint.Text = message;
+
+    // ---------------------------------------------------------------------- key
+
+    private void ProvAnthropic_Click(object sender, RoutedEventArgs e) => SetKeyProvider("anthropic");
+    private void ProvOpenai_Click(object sender, RoutedEventArgs e) => SetKeyProvider("openai");
+
+    private void SetKeyProvider(string provider)
+    {
+        _keyProvider = provider;
+        var primary = (Style)FindResource("Btn");
+        var ghost = (Style)FindResource("Ghost");
+        ProvAnthropic.Style = provider == "anthropic" ? primary : ghost;
+        ProvOpenai.Style = provider == "openai" ? primary : ghost;
+    }
+
+    private void RefreshKeyStatus()
+    {
+        var anthropic = _secrets.Has(SecretStore.AnthropicKey);
+        var openai = _secrets.Has(SecretStore.OpenAiKey);
+        KeyStatus.Text = $"Anthropic — {(anthropic ? "ключ есть ✓" : "нет")}   ·   OpenAI — {(openai ? "ключ есть ✓" : "нет")}";
+    }
+
+    private void SaveKey_Click(object sender, RoutedEventArgs e)
+    {
+        var key = KeyBox.Password?.Trim();
+        if (string.IsNullOrEmpty(key))
+        {
+            KeyHint.Text = "Введите ключ.";
+            return;
+        }
+
+        var name = _keyProvider == "anthropic" ? SecretStore.AnthropicKey : SecretStore.OpenAiKey;
+        try
+        {
+            _secrets.Set(name, key);
+            KeyBox.Clear();
+            RefreshKeyStatus();
+            KeyHint.Text = "Ключ сохранён (зашифрован DPAPI).";
+        }
+        catch (Exception ex)
+        {
+            KeyHint.Text = $"Ошибка: {ex.Message}";
+        }
+    }
 
     private static bool TryParseDouble(string text, out double value) =>
         double.TryParse(text?.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out value);

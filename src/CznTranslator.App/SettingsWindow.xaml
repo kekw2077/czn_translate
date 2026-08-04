@@ -116,6 +116,25 @@
             </Setter>
         </Style>
 
+        <Style TargetType="PasswordBox">
+            <Setter Property="Background" Value="#0E151F"/>
+            <Setter Property="Foreground" Value="{StaticResource Text1}"/>
+            <Setter Property="CaretBrush" Value="{StaticResource Accent}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Border2}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="8,7"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="PasswordBox">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="7">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="H1" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{StaticResource Text1}"/>
             <Setter Property="FontSize" Value="20"/>
@@ -257,7 +276,26 @@
                 <!-- PLACEHOLDER pages -->
                 <StackPanel x:Name="PageKey" Visibility="Collapsed">
                     <TextBlock Style="{StaticResource H1}" Text="Ключ API"/>
-                    <TextBlock Style="{StaticResource Sub}" Text="Скоро: ввод и хранение ключа (DPAPI) прямо здесь."/>
+                    <TextBlock Style="{StaticResource Sub}" Text="Ключ шифруется Windows DPAPI и хранится локально (%LocalAppData%). В открытом виде и в git не попадает."/>
+                    <Border Margin="0,16,0,0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border1}"
+                            BorderThickness="1" CornerRadius="12" Padding="18">
+                        <StackPanel>
+                            <TextBlock Text="Провайдер" Style="{StaticResource FieldLabel}"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                <Button x:Name="ProvAnthropic" Style="{StaticResource Ghost}" Content="Anthropic (Claude)"
+                                        Margin="0,0,8,0" Click="ProvAnthropic_Click"/>
+                                <Button x:Name="ProvOpenai" Style="{StaticResource Ghost}" Content="OpenAI-совместимый"
+                                        Click="ProvOpenai_Click"/>
+                            </StackPanel>
+                            <TextBlock x:Name="KeyStatus" Foreground="{StaticResource Muted}" FontSize="12" Margin="2,8,0,14" Text="—"/>
+                            <TextBlock Text="API-ключ" Style="{StaticResource FieldLabel}"/>
+                            <PasswordBox x:Name="KeyBox"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                                <Button Style="{StaticResource Btn}" Content="Сохранить ключ" Click="SaveKey_Click"/>
+                                <TextBlock x:Name="KeyHint" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="14,0,0,0"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
                 <StackPanel x:Name="PageTranslate" Visibility="Collapsed">
                     <TextBlock Style="{StaticResource H1}" Text="Перевод"/>
