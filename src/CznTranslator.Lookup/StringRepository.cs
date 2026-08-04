@@ -134,6 +134,46 @@ public sealed class StringRepository(TranslationDatabase database)
         return rows;
     }
 
+    /// <summary>Rows awaiting translation (new + stale), oldest first — the batch translator's feed.</summary>
+    public IReadOnlyList<StringRow> Pending(int? limit = null)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT id, key, table_name, en, ru, norm, status, src, pack_version " +
+            "FROM strings WHERE status IN ('new', 'stale') ORDER BY id" +
+            (limit is int n ? $" LIMIT {n}" : string.Empty) + ";";
+
+        var rows = new List<StringRow>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            rows.Add(Read(reader));
+        return rows;
+    }
+
+    /// <summary>
+    /// A finished translation of the same normalized text under some other key (TZ §8). Gacha text
+    /// repeats 20–40%, so this is checked before every model call. Only human-blessed rows qualify.
+    /// </summary>
+    public string? FindTranslationMemory(string norm)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT ru FROM strings
+            WHERE norm_hash = $h AND norm = $norm AND ru IS NOT NULL AND ru <> ''
+              AND status IN ('reviewed', 'locked')
+            ORDER BY CASE status WHEN 'locked' THEN 0 ELSE 1 END, id
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$h", NormHash.ComputeSigned(norm));
+        command.Parameters.AddWithValue("$norm", norm);
+
+        var result = command.ExecuteScalar();
+        return result is string s ? s : null;
+    }
+
     /// <summary>Writes a translation and moves the row's status (review accept, or a model write-back).</summary>
     public void SetTranslation(long id, string? russian, StringStatus status)
     {

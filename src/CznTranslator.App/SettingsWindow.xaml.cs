@@ -54,6 +54,7 @@ public partial class SettingsWindow : Window
         LoadOverlayFields();
         LoadDashboard();
         SetKeyProvider("anthropic");
+        SetTransProvider("anthropic");
         RefreshKeyStatus();
         Footer.Text = $"База: {Path.GetFileName(_repository?.Database.DatabasePath ?? "нет")}";
     }
@@ -421,6 +422,108 @@ public partial class SettingsWindow : Window
         {
             ReviewTitle.Text = $"Ошибка сохранения: {ex.Message}";
         }
+    }
+
+    // ---------------------------------------------------------------- translate
+
+    private string _transProvider = "anthropic";
+    private CancellationTokenSource? _translateCts;
+    private readonly List<string> _translateLog = [];
+
+    private void TransProvAnthropic_Click(object sender, RoutedEventArgs e) => SetTransProvider("anthropic");
+    private void TransProvOpenai_Click(object sender, RoutedEventArgs e) => SetTransProvider("openai");
+
+    private void SetTransProvider(string provider)
+    {
+        _transProvider = provider;
+        var primary = (Style)FindResource("Btn");
+        var ghost = (Style)FindResource("Ghost");
+        TransProvAnthropic.Style = provider == "anthropic" ? primary : ghost;
+        TransProvOpenai.Style = provider == "openai" ? primary : ghost;
+    }
+
+    private async void Translate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_repository is null)
+        {
+            TransHint.Text = "База не подключена.";
+            return;
+        }
+
+        var secretName = _transProvider == "anthropic" ? SecretStore.AnthropicKey : SecretStore.OpenAiKey;
+        var apiKey = _secrets.Get(secretName);
+        if (string.IsNullOrEmpty(apiKey))
+        {
+            TransHint.Text = "Нет ключа — задайте его во вкладке «Ключ API».";
+            return;
+        }
+
+        int? limit = int.TryParse(TransLimit.Text?.Trim(), out var n) && n > 0 ? n : null;
+        var model = string.IsNullOrWhiteSpace(TransModel.Text) ? null : TransModel.Text.Trim();
+        var baseUrl = string.IsNullOrWhiteSpace(TransBaseUrl.Text) ? null : TransBaseUrl.Text.Trim();
+
+        _translateLog.Clear();
+        TransLog.Text = string.Empty;
+        TransProgress.Visibility = Visibility.Visible;
+        TransLogWrap.Visibility = Visibility.Visible;
+        TransHint.Text = string.Empty;
+        TransStop.IsEnabled = true;
+        _translateCts = new CancellationTokenSource();
+
+        var client = new ApiTranslationClient(_transProvider, apiKey, model, baseUrl);
+        var translator = new BatchTranslator(_repository, client);
+        var progress = new Progress<TranslationProgress>(OnTransProgress);
+        AppendTransLog($"Провайдер {_transProvider}, модель {client.Model}.");
+
+        try
+        {
+            await Task.Run(() => translator.RunAsync(limit, progress, _translateCts.Token), _translateCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            AppendTransLog("Остановлено.");
+            TransHint.Text = "Остановлено.";
+        }
+        catch (Exception ex)
+        {
+            AppendTransLog($"Ошибка: {ex.Message}");
+            TransHint.Text = "Ошибка — см. лог.";
+        }
+        finally
+        {
+            TransStop.IsEnabled = false;
+            _translateCts?.Dispose();
+            _translateCts = null;
+            LoadDashboard();
+        }
+    }
+
+    private void TransStop_Click(object sender, RoutedEventArgs e) => _translateCts?.Cancel();
+
+    private void OnTransProgress(TranslationProgress p)
+    {
+        var fraction = p.Total > 0 ? Math.Clamp((double)p.Done / p.Total, 0, 1) : (p.Finished ? 1.0 : 0.0);
+        TransFill.Width = new GridLength(fraction, GridUnitType.Star);
+        TransRest.Width = new GridLength(1 - fraction, GridUnitType.Star);
+        TransPct.Text = $"{fraction:P0}";
+        TransStat.Text = p.Total > 0 ? $"{p.Done:N0} / {p.Total:N0}" : "—";
+
+        var tokens = p.InputTokens + p.OutputTokens > 0
+            ? $"  ·  токены: {p.InputTokens:N0}+{p.OutputTokens:N0}"
+            : string.Empty;
+        AppendTransLog(p.Message + tokens);
+
+        if (p.Finished)
+            TransHint.Text = p.Message;
+    }
+
+    private void AppendTransLog(string line)
+    {
+        _translateLog.Add(line);
+        if (_translateLog.Count > 200)
+            _translateLog.RemoveAt(0);
+        TransLog.Text = string.Join("\n", _translateLog);
+        TransLogScroll.ScrollToEnd();
     }
 
     private static bool TryParseDouble(string text, out double value) =>
