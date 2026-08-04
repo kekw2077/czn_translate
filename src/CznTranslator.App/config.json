@@ -5,8 +5,8 @@
     "source": "wgc",
     "folder": "testdata/frames",
     "fps": 2,
-    "processName": "ChaosZeroNightmare",
-    "windowClass": "UnityWndClass",
+    "processName": "ssr-stove-shield",
+    "windowClass": "GLFW30",
     "windowSearchIntervalMs": 2000
   },
 

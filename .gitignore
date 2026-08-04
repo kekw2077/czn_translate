@@ -24,6 +24,9 @@ models/*.txt
 testdata/frames/*.png
 out/
 
+## Extracted game text — copyrighted game content, kept local (see extracted/README.md)
+extracted/
+
 ## Local overrides
 config.local.json
 tools/.env

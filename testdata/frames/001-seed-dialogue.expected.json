@@ -1,0 +1,10 @@
+﻿{
+  "zones": {
+    "dialogue": {
+      "lines": [
+        { "en": "Blood Pact", "ru": "Кровавый пакт", "source": "exact" },
+        { "en": "Attack Power +15%", "ru": "Сила атаки +15%", "source": "exact" }
+      ]
+    }
+  }
+}
