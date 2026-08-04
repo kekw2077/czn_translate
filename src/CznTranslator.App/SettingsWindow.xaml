@@ -330,6 +330,15 @@
                                         Margin="10,0,0,0" Click="TransStop_Click"/>
                                 <TextBlock x:Name="TransHint" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="14,0,0,0"/>
                             </StackPanel>
+                            <Border Margin="0,16,0,0" BorderBrush="{StaticResource Border1}" BorderThickness="0,1,0,0" Padding="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Или загрузите перевод, сделанный внешней нейросетью (файл {english: русский}):"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Style="{StaticResource Ghost}" Content="Импорт перевода из файла (JSON)" Click="Import_Click"/>
+                                        <TextBlock x:Name="ImportHint" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="14,0,0,0" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
                             <StackPanel x:Name="TransProgress" Visibility="Collapsed" Margin="0,16,0,0">
                                 <DockPanel Margin="0,0,0,6">
                                     <TextBlock x:Name="TransPct" DockPanel.Dock="Right" Foreground="{StaticResource Muted}" FontSize="12" Text="0%"/>

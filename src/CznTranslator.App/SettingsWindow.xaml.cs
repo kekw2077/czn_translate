@@ -501,6 +501,41 @@ public partial class SettingsWindow : Window
 
     private void TransStop_Click(object sender, RoutedEventArgs e) => _translateCts?.Cancel();
 
+    private void Import_Click(object sender, RoutedEventArgs e)
+    {
+        if (_repository is null)
+        {
+            ImportHint.Text = "База не подключена.";
+            return;
+        }
+
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Файл перевода: JSON вида {\"english\": \"русский\"}",
+            Filter = "JSON (*.json)|*.json|Все файлы (*.*)|*.*",
+        };
+        if (dialog.ShowDialog() != true)
+            return;
+
+        try
+        {
+            var map = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(dialog.FileName));
+            if (map is null || map.Count == 0)
+            {
+                ImportHint.Text = "Файл пуст или не в формате {english: русский}.";
+                return;
+            }
+
+            var applied = _repository.ApplyTranslationsByEnglish(map, StringStatus.MachineTranslated);
+            ImportHint.Text = $"Загружено: {applied:N0} строк (статус mt). Проверьте во вкладке «Ревью».";
+            LoadDashboard();
+        }
+        catch (Exception ex)
+        {
+            ImportHint.Text = $"Ошибка: {ex.Message}";
+        }
+    }
+
     private void OnTransProgress(TranslationProgress p)
     {
         var fraction = p.Total > 0 ? Math.Clamp((double)p.Done / p.Total, 0, 1) : (p.Finished ? 1.0 : 0.0);

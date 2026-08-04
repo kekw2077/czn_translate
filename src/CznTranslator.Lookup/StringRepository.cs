@@ -174,6 +174,36 @@ public sealed class StringRepository(TranslationDatabase database)
         return result is string s ? s : null;
     }
 
+    /// <summary>
+    /// Applies an <c>English → Russian</c> map (e.g. from an external LLM) to every row carrying that
+    /// English, in one transaction. Matching by exact English fans a translation out to duplicates,
+    /// the same way the batch translator does. Returns the number of rows updated.
+    /// </summary>
+    public int ApplyTranslationsByEnglish(IReadOnlyDictionary<string, string> englishToRussian, StringStatus status)
+    {
+        using var connection = _database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE strings SET ru = $ru, status = $status, updated_at = $now WHERE en = $en;";
+        var en = command.Parameters.Add("$en", SqliteType.Text);
+        var ru = command.Parameters.Add("$ru", SqliteType.Text);
+        command.Parameters.AddWithValue("$status", ToDb(status));
+        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+
+        var affected = 0;
+        foreach (var (english, russian) in englishToRussian)
+        {
+            if (string.IsNullOrEmpty(english) || string.IsNullOrWhiteSpace(russian))
+                continue;
+            en.Value = english;
+            ru.Value = russian;
+            affected += command.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+        return affected;
+    }
+
     /// <summary>Writes a translation and moves the row's status (review accept, or a model write-back).</summary>
     public void SetTranslation(long id, string? russian, StringStatus status)
     {
