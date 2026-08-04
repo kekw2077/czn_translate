@@ -48,14 +48,18 @@ public partial class App : System.Windows.Application
         // M1 diagnostic mode (§10): overlay + window tracking + a rectangle, without OCR/DB/pipeline.
         // Lets the milestone be exercised on a real machine before the models and database exist.
         var m1 = e.Args.Any(arg => string.Equals(arg, "--m1", StringComparison.OrdinalIgnoreCase));
+        var m2 = e.Args.Any(arg => string.Equals(arg, "--m2", StringComparison.OrdinalIgnoreCase));
 
-        // A frame budget means the run is non-interactive; a modal error box would hang it, so on
-        // failure we log and exit instead of blocking on a dialog nobody can dismiss.
-        var headless = m1 && e.Args.Any(arg => string.Equals(arg, "--frames", StringComparison.OrdinalIgnoreCase));
+        // Non-interactive runs (the M2 benchmark, or an M1 run with a frame budget) exit on their
+        // own; a modal error box would hang them, so on failure we log and exit instead of blocking
+        // on a dialog nobody can dismiss.
+        var headless = m2 || (m1 && e.Args.Any(arg => string.Equals(arg, "--frames", StringComparison.OrdinalIgnoreCase)));
 
         try
         {
-            if (m1)
+            if (m2)
+                await RunM2BenchmarkAsync(e.Args, _shutdown.Token);
+            else if (m1)
                 await RunM1DiagnosticAsync(e.Args, _shutdown.Token);
             else
                 await StartAsync(_shutdown.Token);
@@ -228,6 +232,86 @@ public partial class App : System.Windows.Application
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
     private static extern nint GetWindowLongPtr(nint hWnd, int index);
+
+    /// <summary>
+    /// M2 (§10): run the real det + rec ONNX pipeline on a 400×80 zone and measure the latency,
+    /// the milestone's acceptance number (det+rec ≤ 30 ms). Real game frames come later (§12);
+    /// this uses a synthetic zone with known English text so the pipeline can be timed before any
+    /// screenshots exist. Flags: <c>--models &lt;dir&gt;</c>, <c>--iters N</c>, <c>--cpu</c>.
+    /// </summary>
+    private async Task RunM2BenchmarkAsync(string[] args, CancellationToken cancellationToken)
+    {
+        var configPath = Path.Combine(AppContext.BaseDirectory, "config.json");
+        _configService = new ConfigService(configPath);
+        var config = _configService.Current;
+        ConfigureLogging(config.Logging);
+
+        var modelsFlag = Array.FindIndex(args, a => string.Equals(a, "--models", StringComparison.OrdinalIgnoreCase));
+        if (modelsFlag >= 0 && modelsFlag + 1 < args.Length)
+            config.Ocr.ModelsDirectory = args[modelsFlag + 1];
+        config.Ocr.ModelsDirectory = Path.GetFullPath(config.Ocr.ModelsDirectory);
+
+        if (args.Any(a => string.Equals(a, "--cpu", StringComparison.OrdinalIgnoreCase)))
+            config.Ocr.Provider = Core.Models.OcrProviderKind.Cpu;
+
+        var iterations = 50;
+        var itersFlag = Array.FindIndex(args, a => string.Equals(a, "--iters", StringComparison.OrdinalIgnoreCase));
+        if (itersFlag >= 0 && itersFlag + 1 < args.Length && int.TryParse(args[itersFlag + 1], out var parsedIters))
+            iterations = Math.Max(1, parsedIters);
+
+        Log.Information("M2 benchmark: det+rec on a 400x80 zone, {Iters} iterations, models in {Dir}.",
+            iterations, config.Ocr.ModelsDirectory);
+
+        var adapterProvider = OperatingSystem.IsWindows()
+            ? (IGraphicsAdapterProvider)new DxgiAdapterProvider()
+            : new EmptyAdapterProvider();
+
+        using var backend = new OcrBackendFactory(adapterProvider).Create(config);
+        Log.Information("OCR backend: {Backend}", backend.Info);
+
+        var warmup = System.Diagnostics.Stopwatch.StartNew();
+        await backend.WarmUpAsync(cancellationToken);
+        Log.Information("Warm-up finished in {Ms} ms.", warmup.ElapsedMilliseconds);
+
+        var roi = M2TestImage.Render(400, 80, "Attack Power +15%");
+
+        // One untimed read to confirm the pipeline actually recognizes the zone.
+        var probe = await backend.RecognizeAsync(roi, OcrRequestOptions.Default, cancellationToken);
+        Log.Information("Recognized {Count} line(s): {Text}",
+            probe.Lines.Count,
+            string.Join(" | ", probe.Lines.Select(l => $"'{l.Text}' ({l.Confidence:F2})")));
+
+        var det = new List<double>(iterations);
+        var rec = new List<double>(iterations);
+        var total = new List<double>(iterations);
+
+        for (var i = 0; i < iterations; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = await backend.RecognizeAsync(roi, OcrRequestOptions.Default, cancellationToken);
+            det.Add(result.DetectMs);
+            rec.Add(result.RecognizeMs);
+            total.Add(result.TotalMs);
+        }
+
+        static double Percentile(List<double> values, double p)
+        {
+            var sorted = values.OrderBy(x => x).ToList();
+            var index = Math.Clamp((int)Math.Ceiling(p * sorted.Count) - 1, 0, sorted.Count - 1);
+            return sorted[index];
+        }
+
+        var medianTotal = Percentile(total, 0.5);
+        Log.Information("M2 det   ms: median {Med:F2}  p95 {P95:F2}", Percentile(det, 0.5), Percentile(det, 0.95));
+        Log.Information("M2 rec   ms: median {Med:F2}  p95 {P95:F2}", Percentile(rec, 0.5), Percentile(rec, 0.95));
+        Log.Information("M2 total ms: median {Med:F2}  p95 {P95:F2}  (target ≤ 30 ms)",
+            medianTotal, Percentile(total, 0.95));
+        Log.Information("M2 verdict: median det+rec {Med:F2} ms {Verdict} the 30 ms budget on {Backend}.",
+            medianTotal, medianTotal <= 30 ? "MEETS" : "EXCEEDS", backend.Info);
+
+        Shutdown(0);
+        await Task.CompletedTask;
+    }
 
     private async Task StartAsync(CancellationToken cancellationToken)
     {
