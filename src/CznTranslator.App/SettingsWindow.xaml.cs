@@ -56,6 +56,7 @@ public partial class SettingsWindow : Window
         SetKeyProvider("anthropic");
         SetTransProvider("anthropic");
         RefreshKeyStatus();
+        InitUpdateTab();
         Footer.Text = $"База: {Path.GetFileName(_repository?.Database.DatabasePath ?? "нет")}";
     }
 
@@ -524,6 +525,143 @@ public partial class SettingsWindow : Window
             _translateLog.RemoveAt(0);
         TransLog.Text = string.Join("\n", _translateLog);
         TransLogScroll.ScrollToEnd();
+    }
+
+    // ------------------------------------------------------------------- update
+
+    private const string DefaultPackPath =
+        @"C:\ProgramData\Smilegate\Games\ChaosZeroNightmare\bin\appdata\cznlive\data.pack";
+
+    private CancellationTokenSource? _updateCts;
+    private readonly List<string> _updateLog = [];
+
+    private void InitUpdateTab()
+    {
+        UpdatePack.Text = DefaultPackPath;
+        if (!PackExtractor.TryLoadDefault(out _, out var error))
+        {
+            UpdateCheckBtn.IsEnabled = false;
+            UpdateApplyBtn.IsEnabled = false;
+            UpdateHint.Text = error;
+        }
+    }
+
+    private void UpdateCheck_Click(object sender, RoutedEventArgs e) => _ = RunUpdate(apply: false);
+
+    private void UpdateApply_Click(object sender, RoutedEventArgs e)
+    {
+        if (System.Windows.MessageBox.Show(
+                "Извлечь из data.pack и применить изменения к базе?",
+                "CZN Translator", System.Windows.MessageBoxButton.OKCancel,
+                System.Windows.MessageBoxImage.Question) == System.Windows.MessageBoxResult.OK)
+            _ = RunUpdate(apply: true);
+    }
+
+    private async Task RunUpdate(bool apply)
+    {
+        if (_repository is null)
+        {
+            UpdateHint.Text = "База не подключена.";
+            return;
+        }
+
+        var packPath = UpdatePack.Text?.Trim() ?? string.Empty;
+        if (!System.IO.File.Exists(packPath))
+        {
+            UpdateHint.Text = "data.pack не найден по этому пути.";
+            return;
+        }
+
+        if (!PackExtractor.TryLoadDefault(out var extractor, out var error))
+        {
+            UpdateHint.Text = error;
+            return;
+        }
+
+        _updateLog.Clear();
+        UpdateLog.Text = string.Empty;
+        UpdateLogWrap.Visibility = Visibility.Visible;
+        UpdateTiles.Items.Clear();
+        UpdateCheckBtn.IsEnabled = false;
+        UpdateApplyBtn.IsEnabled = false;
+        UpdateHint.Text = apply ? "Извлечение и применение…" : "Извлечение и сравнение…";
+        _updateCts = new CancellationTokenSource();
+
+        var updater = new PackUpdater(_repository, extractor!);
+        var progress = new Progress<string>(AppendUpdateLog);
+
+        try
+        {
+            var diff = await Task.Run(() => updater.RunAsync(packPath, apply, progress, _updateCts.Token), _updateCts.Token);
+            ShowUpdateTiles(diff);
+            UpdateHint.Text = apply ? "Применено." : "Проверка завершена.";
+            if (apply)
+                LoadDashboard();
+        }
+        catch (OperationCanceledException)
+        {
+            UpdateHint.Text = "Остановлено.";
+        }
+        catch (Exception ex)
+        {
+            AppendUpdateLog($"Ошибка: {ex.Message}");
+            UpdateHint.Text = "Ошибка — см. лог.";
+        }
+        finally
+        {
+            UpdateCheckBtn.IsEnabled = true;
+            UpdateApplyBtn.IsEnabled = true;
+            _updateCts?.Dispose();
+            _updateCts = null;
+        }
+    }
+
+    private void ShowUpdateTiles(PackDiff diff)
+    {
+        UpdateTiles.Items.Clear();
+        AddUpdateTile("Новые", diff.New, (Brush)FindResource("Accent"));
+        AddUpdateTile("Изменены", diff.Changed, (Brush)FindResource("Accent"));
+        AddUpdateTile("Удалены", diff.Removed, null);
+        AddUpdateTile("Без изменений", diff.Unchanged, null);
+    }
+
+    private void AddUpdateTile(string label, int value, Brush? accent)
+    {
+        var stack = new StackPanel();
+        stack.Children.Add(new TextBlock
+        {
+            Text = value.ToString("N0", CultureInfo.CurrentCulture),
+            FontSize = 22,
+            FontWeight = FontWeights.Bold,
+            Foreground = accent ?? (Brush)FindResource("Text1"),
+        });
+        stack.Children.Add(new TextBlock
+        {
+            Text = label,
+            FontSize = 12,
+            Margin = new Thickness(0, 2, 0, 0),
+            Foreground = (Brush)FindResource("Muted"),
+        });
+        UpdateTiles.Items.Add(new Border
+        {
+            Background = (Brush)FindResource("Tile"),
+            BorderBrush = (Brush)FindResource("Border1"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(16, 12, 22, 12),
+            Margin = new Thickness(0, 0, 12, 0),
+            MinWidth = 120,
+            Child = stack,
+        });
+    }
+
+    private void AppendUpdateLog(string line)
+    {
+        _updateLog.Add(line);
+        if (_updateLog.Count > 200)
+            _updateLog.RemoveAt(0);
+        UpdateLog.Text = string.Join("\n", _updateLog);
+        UpdateLogScroll.ScrollToEnd();
     }
 
     private static bool TryParseDouble(string text, out double value) =>

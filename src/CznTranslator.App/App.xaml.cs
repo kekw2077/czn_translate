@@ -56,11 +56,12 @@ public partial class App : System.Windows.Application
         var m2 = e.Args.Any(arg => string.Equals(arg, "--m2", StringComparison.OrdinalIgnoreCase));
         var framesTest = e.Args.Any(arg => string.Equals(arg, "--frames-test", StringComparison.OrdinalIgnoreCase));
         var settingsOnly = e.Args.Any(arg => string.Equals(arg, "--settings", StringComparison.OrdinalIgnoreCase));
+        var extractTest = e.Args.Any(arg => string.Equals(arg, "--extract-test", StringComparison.OrdinalIgnoreCase));
 
         // Non-interactive runs (the benchmarks, the frame regression, or an M1 run with a frame
         // budget) exit on their own; a modal error box would hang them, so on failure we log and
         // exit instead of blocking on a dialog nobody can dismiss.
-        var headless = m2 || framesTest || (m1 && e.Args.Any(arg => string.Equals(arg, "--frames", StringComparison.OrdinalIgnoreCase)));
+        var headless = m2 || framesTest || extractTest || (m1 && e.Args.Any(arg => string.Equals(arg, "--frames", StringComparison.OrdinalIgnoreCase)));
 
         try
         {
@@ -72,6 +73,8 @@ public partial class App : System.Windows.Application
                 await RunM1DiagnosticAsync(e.Args, _shutdown.Token);
             else if (settingsOnly)
                 RunSettingsOnly();
+            else if (extractTest)
+                RunExtractTest(e.Args);
             else
                 await StartAsync(_shutdown.Token);
         }
@@ -703,6 +706,36 @@ public partial class App : System.Windows.Application
 
         var window = OpenSettings();
         window.Closed += (_, _) => Shutdown(0);
+    }
+
+    /// <summary><c>--extract-test &lt;pack&gt;</c>: decode the pack in C# and print the pair count, to
+    /// check the native extractor against the Python one without the game or the UI.</summary>
+    private void RunExtractTest(string[] args)
+    {
+        ConfigureLogging(new LoggingSection());
+
+        var flag = Array.FindIndex(args, a => string.Equals(a, "--extract-test", StringComparison.OrdinalIgnoreCase));
+        var packPath = flag >= 0 && flag + 1 < args.Length ? args[flag + 1] : null;
+        if (packPath is null || !File.Exists(packPath))
+        {
+            Log.Error("--extract-test needs an existing data.pack path.");
+            Shutdown(2);
+            return;
+        }
+
+        if (!PackExtractor.TryLoadDefault(out var extractor, out var error))
+        {
+            Log.Error("Keys unavailable: {Error}", error);
+            Shutdown(2);
+            return;
+        }
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var pairs = extractor!.Extract(packPath, "en", new Progress<string>(m => Log.Information("{Msg}", m)), CancellationToken.None);
+        Log.Information("Extracted {Count} key→text pairs in {Sec:F1}s.", pairs.Count, stopwatch.Elapsed.TotalSeconds);
+        foreach (var (key, value) in pairs.Take(5))
+            Log.Information("  {Key} = {Value}", key, value);
+        Shutdown(0);
     }
 
     /// <summary>Opens the settings window, or brings the existing one to the front.</summary>

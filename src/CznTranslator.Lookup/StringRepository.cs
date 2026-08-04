@@ -187,6 +187,35 @@ public sealed class StringRepository(TranslationDatabase database)
         command.ExecuteNonQuery();
     }
 
+    /// <summary>Every pack string's <c>key → English</c>, for diffing a freshly decoded pack (§8).</summary>
+    public IReadOnlyDictionary<string, string> PackKeyEnglish()
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT key, en FROM strings WHERE key IS NOT NULL AND src = 'pack';";
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            map[reader.GetString(0)] = reader.GetString(1);
+        return map;
+    }
+
+    public int RecordPackVersion(string packMd5, string? note)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO pack_versions (version, pack_md5, ripped_at, note)
+            VALUES ((SELECT COALESCE(MAX(version), 0) + 1 FROM pack_versions), $md5, $now, $note)
+            RETURNING version;
+            """;
+        command.Parameters.AddWithValue("$md5", packMd5);
+        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        command.Parameters.AddWithValue("$note", (object?)note ?? DBNull.Value);
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
     /// <summary>Raw <c>status → count</c> over the whole table, for the settings dashboard.</summary>
     public IReadOnlyDictionary<string, int> StatusCounts()
     {

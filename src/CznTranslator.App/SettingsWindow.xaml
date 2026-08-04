@@ -373,7 +373,31 @@
                 </StackPanel>
                 <StackPanel x:Name="PageUpdate" Visibility="Collapsed">
                     <TextBlock Style="{StaticResource H1}" Text="Обновление после патча"/>
-                    <TextBlock Style="{StaticResource Sub}" Text="Скоро: пере-декод data.pack и обновление базы."/>
+                    <TextBlock Style="{StaticResource Sub}" Text="Пере-декодировать data.pack и обновить только изменения: новые → в очередь; изменённые → «stale» (старый перевод остаётся); удалённые сохраняются. Ручной перевод не теряется."/>
+                    <Border Margin="0,16,0,0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border1}"
+                            BorderThickness="1" CornerRadius="12" Padding="18">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Путь к data.pack"/>
+                            <TextBox x:Name="UpdatePack"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                                <Button x:Name="UpdateCheckBtn" Style="{StaticResource Ghost}" Content="Проверить обновление" Click="UpdateCheck_Click"/>
+                                <Button x:Name="UpdateApplyBtn" Style="{StaticResource Btn}" Content="Применить изменения" Margin="10,0,0,0" Click="UpdateApply_Click"/>
+                                <TextBlock x:Name="UpdateHint" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="14,0,0,0"/>
+                            </StackPanel>
+                            <ItemsControl x:Name="UpdateTiles" Margin="0,16,0,0">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                            </ItemsControl>
+                            <Border x:Name="UpdateLogWrap" Visibility="Collapsed" Margin="0,14,0,0" Background="#0B1119"
+                                    BorderBrush="{StaticResource Border1}" BorderThickness="1" CornerRadius="9" Padding="12,10">
+                                <ScrollViewer x:Name="UpdateLogScroll" MaxHeight="150" VerticalScrollBarVisibility="Auto">
+                                    <TextBlock x:Name="UpdateLog" Foreground="#B7C4D4" FontSize="12"
+                                               FontFamily="Cascadia Code, Consolas, monospace" TextWrapping="Wrap"/>
+                                </ScrollViewer>
+                            </Border>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </Grid>
         </ScrollViewer>
