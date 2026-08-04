@@ -1,5 +1,6 @@
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Threading;
 using CznTranslator.Capture;
@@ -49,16 +50,19 @@ public partial class App : System.Windows.Application
         // Lets the milestone be exercised on a real machine before the models and database exist.
         var m1 = e.Args.Any(arg => string.Equals(arg, "--m1", StringComparison.OrdinalIgnoreCase));
         var m2 = e.Args.Any(arg => string.Equals(arg, "--m2", StringComparison.OrdinalIgnoreCase));
+        var framesTest = e.Args.Any(arg => string.Equals(arg, "--frames-test", StringComparison.OrdinalIgnoreCase));
 
-        // Non-interactive runs (the M2 benchmark, or an M1 run with a frame budget) exit on their
-        // own; a modal error box would hang them, so on failure we log and exit instead of blocking
-        // on a dialog nobody can dismiss.
-        var headless = m2 || (m1 && e.Args.Any(arg => string.Equals(arg, "--frames", StringComparison.OrdinalIgnoreCase)));
+        // Non-interactive runs (the benchmarks, the frame regression, or an M1 run with a frame
+        // budget) exit on their own; a modal error box would hang them, so on failure we log and
+        // exit instead of blocking on a dialog nobody can dismiss.
+        var headless = m2 || framesTest || (m1 && e.Args.Any(arg => string.Equals(arg, "--frames", StringComparison.OrdinalIgnoreCase)));
 
         try
         {
             if (m2)
                 await RunM2BenchmarkAsync(e.Args, _shutdown.Token);
+            else if (framesTest)
+                await RunFramesTestAsync(e.Args, _shutdown.Token);
             else if (m1)
                 await RunM1DiagnosticAsync(e.Args, _shutdown.Token);
             else
@@ -254,6 +258,9 @@ public partial class App : System.Windows.Application
         if (args.Any(a => string.Equals(a, "--cpu", StringComparison.OrdinalIgnoreCase)))
             config.Ocr.Provider = Core.Models.OcrProviderKind.Cpu;
 
+        if (args.Any(a => string.Equals(a, "--quant", StringComparison.OrdinalIgnoreCase)))
+            config.Ocr.Quantized = true; // picks the *_quant.onnx int8 pair (laptop profile).
+
         var iterations = 50;
         var itersFlag = Array.FindIndex(args, a => string.Equals(a, "--iters", StringComparison.OrdinalIgnoreCase));
         if (itersFlag >= 0 && itersFlag + 1 < args.Length && int.TryParse(args[itersFlag + 1], out var parsedIters))
@@ -311,6 +318,123 @@ public partial class App : System.Windows.Application
 
         Shutdown(0);
         await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Replays a folder of PNG frames through det + rec and, where a <c>&lt;frame&gt;.expected.json</c>
+    /// sits next to one, checks the recognized lines against its <c>en</c> values (§12). This is the
+    /// OCR half of the regression set — it needs no database, so it runs before the pack is imported;
+    /// the <c>ru</c>/<c>source</c> fields become checkable once the full pipeline runs on a real DB.
+    /// Flags: <c>--frames-test &lt;dir&gt;</c> (default: config's capture folder), <c>--models</c>, <c>--cpu</c>.
+    /// </summary>
+    private async Task RunFramesTestAsync(string[] args, CancellationToken cancellationToken)
+    {
+        var configPath = Path.Combine(AppContext.BaseDirectory, "config.json");
+        _configService = new ConfigService(configPath);
+        var config = _configService.Current;
+        ConfigureLogging(config.Logging);
+
+        var modelsFlag = Array.FindIndex(args, a => string.Equals(a, "--models", StringComparison.OrdinalIgnoreCase));
+        if (modelsFlag >= 0 && modelsFlag + 1 < args.Length)
+            config.Ocr.ModelsDirectory = args[modelsFlag + 1];
+        config.Ocr.ModelsDirectory = Path.GetFullPath(config.Ocr.ModelsDirectory);
+
+        if (args.Any(a => string.Equals(a, "--cpu", StringComparison.OrdinalIgnoreCase)))
+            config.Ocr.Provider = Core.Models.OcrProviderKind.Cpu;
+        if (args.Any(a => string.Equals(a, "--quant", StringComparison.OrdinalIgnoreCase)))
+            config.Ocr.Quantized = true;
+
+        var dirFlag = Array.FindIndex(args, a => string.Equals(a, "--frames-test", StringComparison.OrdinalIgnoreCase));
+        var dir = dirFlag >= 0 && dirFlag + 1 < args.Length && !args[dirFlag + 1].StartsWith("--", StringComparison.Ordinal)
+            ? args[dirFlag + 1]
+            : config.Capture.Folder;
+        dir = Path.GetFullPath(dir);
+
+        if (!Directory.Exists(dir))
+        {
+            Log.Error("Frames directory {Dir} does not exist.", dir);
+            Shutdown(2);
+            return;
+        }
+
+        var frames = Directory.GetFiles(dir, "*.png").OrderBy(p => p, StringComparer.Ordinal).ToArray();
+        Log.Information("Frames regression: {Count} PNG(s) in {Dir}.", frames.Length, dir);
+
+        var adapterProvider = OperatingSystem.IsWindows()
+            ? (IGraphicsAdapterProvider)new DxgiAdapterProvider()
+            : new EmptyAdapterProvider();
+
+        using var backend = new OcrBackendFactory(adapterProvider).Create(config);
+        Log.Information("OCR backend: {Backend}", backend.Info);
+        await backend.WarmUpAsync(cancellationToken);
+
+        static string Normalize(string s) =>
+            string.Join(' ', s.ToLowerInvariant().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+        var withExpectations = 0;
+        var passed = 0;
+
+        foreach (var frame in frames)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var roi = FolderFrameSource.LoadGrayscale(frame);
+            var result = await backend.RecognizeAsync(roi, OcrRequestOptions.Default, cancellationToken);
+            var recognized = result.Lines.Select(l => l.Text).Where(t => !string.IsNullOrWhiteSpace(t)).ToList();
+            var name = Path.GetFileName(frame);
+
+            var expectedPath = Path.ChangeExtension(frame, ".expected.json");
+            if (!File.Exists(expectedPath))
+            {
+                Log.Information("{Name}: no expectations · det+rec {Ms:F1} ms · read [{Read}]",
+                    name, result.TotalMs, string.Join(" | ", recognized));
+                continue;
+            }
+
+            withExpectations++;
+            var expected = ReadExpectedEn(expectedPath);
+            var recSet = recognized.Select(Normalize).OrderBy(x => x).ToList();
+            var expSet = expected.Select(Normalize).OrderBy(x => x).ToList();
+            var match = recSet.SequenceEqual(expSet);
+            if (match)
+                passed++;
+
+            var missing = expSet.Except(recSet).ToList();
+            var extra = recSet.Except(expSet).ToList();
+            Log.Information("{Name}: {Verdict} · det+rec {Ms:F1} ms · read [{Read}]{Missing}{Extra}",
+                name, match ? "PASS" : "FAIL", result.TotalMs, string.Join(" | ", recognized),
+                missing.Count > 0 ? " · missing [" + string.Join(" | ", missing) + "]" : string.Empty,
+                extra.Count > 0 ? " · extra [" + string.Join(" | ", extra) + "]" : string.Empty);
+        }
+
+        Log.Information("Frames regression: {Passed}/{WithExpectations} matched · {Total} frame(s) total.",
+            passed, withExpectations, frames.Length);
+
+        Shutdown(withExpectations == 0 || passed == withExpectations ? 0 : 2);
+    }
+
+    /// <summary>Flattens a <c>.expected.json</c> to the list of <c>en</c> strings across all zones.</summary>
+    private static List<string> ReadExpectedEn(string path)
+    {
+        var result = new List<string>();
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+
+        if (!document.RootElement.TryGetProperty("zones", out var zones))
+            return result;
+
+        foreach (var zone in zones.EnumerateObject())
+        {
+            if (!zone.Value.TryGetProperty("lines", out var lines))
+                continue;
+
+            foreach (var line in lines.EnumerateArray())
+            {
+                if (line.TryGetProperty("en", out var en) && en.ValueKind == JsonValueKind.String)
+                    result.Add(en.GetString()!);
+            }
+        }
+
+        return result;
     }
 
     private async Task StartAsync(CancellationToken cancellationToken)
