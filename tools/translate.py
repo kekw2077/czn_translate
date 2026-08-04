@@ -1,25 +1,52 @@
 #!/usr/bin/env python3
 """Batch translation through Ollama (TZ §8).
 
-    python translate.py --db ../czn.db --limit 2000
+    python translate.py --db ../czn.db --limit 2000                       # local Ollama (default)
+    python translate.py --db ../czn.db --provider anthropic --limit 30    # hosted API, small taste
+    python translate.py --db ../czn.db --provider anthropic               # hosted API, full run
 
 Order of operations per string: translation memory first, then the model. Gacha text repeats
-20–40%, so the memory lookup is not an optimization detail — it is most of the work.
+20–40%, so the memory lookup is not an optimization detail — it is most of the work. On top of
+that, identical English within one run is collapsed to a single model call and fanned back out,
+which roughly halves a cold base (the memory only reuses human-reviewed rows, not this run's own
+machine output).
+
+For a hosted provider the API key is read from an environment variable (``ANTHROPIC_API_KEY`` or
+``OPENAI_API_KEY`` by default), or from ``tools/.env`` which is gitignored — the key is never a
+command-line argument.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 import yaml
 
+from czn.apiclient import ApiClient
 from czn.db import STATUS_MT, STATUS_NEW, STATUS_REVIEWED, STATUS_STALE, Database
 from czn.ollama import BatchTranslationError, OllamaClient, TranslationItem, chunk
 from czn.validate import is_translatable, validate
 
 DEFAULT_GLOSSARY = Path(__file__).resolve().parent / "glossary.yaml"
+DEFAULT_ENV = Path(__file__).resolve().parent / ".env"
+
+# Which env var holds the key for each hosted provider, unless --api-key-env overrides it.
+KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+
+
+def load_env_file(path: Path) -> None:
+    """Populate os.environ from a gitignored KEY=VALUE file, without clobbering a real env var."""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        os.environ.setdefault(name.strip(), value.strip().strip('"').strip("'"))
 
 
 def load_glossary(path: Path) -> dict[str, dict]:
@@ -39,8 +66,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--db", type=Path, default=Path("czn.db"))
     parser.add_argument("--glossary", type=Path, default=DEFAULT_GLOSSARY)
-    parser.add_argument("--endpoint", default="http://127.0.0.1:11434")
-    parser.add_argument("--model", default="qwen3-loc")
+    parser.add_argument(
+        "--provider",
+        choices=("ollama", "anthropic", "openai"),
+        default="ollama",
+        help="local Ollama (default) or a hosted API",
+    )
+    parser.add_argument("--endpoint", default="http://127.0.0.1:11434", help="Ollama endpoint")
+    parser.add_argument("--base-url", help="override the API base URL (openai-compatible hosts, self-hosted)")
+    parser.add_argument("--api-key-env", help="env var holding the API key (default per provider)")
+    parser.add_argument("--model", help="model name (defaults per provider)")
     parser.add_argument("--batch-size", type=int, default=40)
     parser.add_argument("--limit", type=int, help="stop after this many strings")
     parser.add_argument("--dry-run", action="store_true", help="use the memory only, never call the model")
@@ -54,7 +89,21 @@ def main(argv: list[str] | None = None) -> int:
     glossary = {en: value["ru"] for en, value in glossary_entries.items()}
 
     database = Database(args.db)
-    client = OllamaClient(args.endpoint, args.model)
+
+    if args.provider == "ollama":
+        client = OllamaClient(args.endpoint, args.model or "qwen3-loc")
+    else:
+        load_env_file(DEFAULT_ENV)
+        key_env = args.api_key_env or KEY_ENV[args.provider]
+        api_key = os.environ.get(key_env, "")
+        if not api_key:
+            print(
+                f"No API key: set {key_env} in the environment or in {DEFAULT_ENV}.",
+                file=sys.stderr,
+            )
+            return 1
+        client = ApiClient(args.provider, api_key, model=args.model, base_url=args.base_url)
+        print(f"Provider {args.provider}, model {client.model}.")
 
     memory_hits = 0
     skipped = 0
@@ -97,7 +146,16 @@ def main(argv: list[str] | None = None) -> int:
             print("Dry run, the model was not called.")
             return 0
 
-        for index, batch in enumerate(chunk(remaining, args.batch_size), start=1):
+        # Collapse identical English to one model call, then fan the answer back to every row
+        # that carried it — the review queue and any human fix still land per row.
+        by_en: dict[str, list[int]] = {}
+        for item in remaining:
+            by_en.setdefault(item.en, []).append(item.id)
+        unique_items = [TranslationItem(id=ids[0], en=en) for en, ids in by_en.items()]
+        if len(unique_items) != len(remaining):
+            print(f"Collapsed {len(remaining)} row(s) to {len(unique_items)} unique string(s).")
+
+        for index, batch in enumerate(chunk(unique_items, args.batch_size), start=1):
             try:
                 results = client.translate_batch(batch, glossary)
             except BatchTranslationError as error:
@@ -107,24 +165,31 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  batch {index} failed: {error}", file=sys.stderr)
                 continue
 
-            for string_id, russian in results.items():
-                findings = validate(originals[string_id], russian)
-                if findings:
-                    flagged += 1
+            for rep_id, russian in results.items():
+                english = originals[rep_id]
+                if validate(english, russian):
+                    flagged += len(by_en[english])
 
                 # Everything the model produced lands as 'mt', which is the review queue.
                 # A failed check does not block the write — a flawed translation with a note
                 # beside it is more useful to a reviewer than a hole.
-                database.set_translation(connection, string_id, russian, STATUS_MT)
+                for string_id in by_en[english]:
+                    database.set_translation(connection, string_id, russian, STATUS_MT)
+                    translated += 1
 
             connection.commit()
-            translated += len(results)
-            print(f"  batch {index}: {len(results)} translated")
+            print(f"  batch {index}: {len(results)} unique translated")
 
     print(
         f"Done. memory {memory_hits}, model {translated}, untranslatable {skipped}, "
         f"flagged for review {flagged}, failed batches {failed_batches}."
     )
+    if isinstance(client, ApiClient):
+        usage = client.usage
+        print(
+            f"API usage: {usage.calls} call(s), "
+            f"{usage.input_tokens:,} input + {usage.output_tokens:,} output tokens."
+        )
     return 1 if failed_batches else 0
 
 
