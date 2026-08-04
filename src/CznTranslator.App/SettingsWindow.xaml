@@ -303,7 +303,19 @@
                 </StackPanel>
                 <StackPanel x:Name="PageReview" Visibility="Collapsed">
                     <TextBlock Style="{StaticResource H1}" Text="Ревью"/>
-                    <TextBlock Style="{StaticResource Sub}" Text="Скоро: очередь машинного перевода с приёмом/закреплением."/>
+                    <TextBlock Style="{StaticResource Sub}" Text="Очередь машинного перевода. «Принять» делает строку памятью переводов — она переиспользуется на дублях."/>
+                    <Border Margin="0,16,0,0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border1}"
+                            BorderThickness="1" CornerRadius="12" Padding="18">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,12">
+                                <Button Style="{StaticResource Ghost}" Content="Обновить" DockPanel.Dock="Right" Click="ReviewReload_Click"/>
+                                <TextBlock x:Name="ReviewTitle" Foreground="{StaticResource Text1}" FontWeight="Bold" FontSize="14"
+                                           VerticalAlignment="Center" Text="Очередь"/>
+                            </DockPanel>
+                            <StackPanel x:Name="ReviewList"/>
+                            <StackPanel x:Name="ReviewPager" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,0"/>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
                 <StackPanel x:Name="PageUpdate" Visibility="Collapsed">
                     <TextBlock Style="{StaticResource H1}" Text="Обновление после патча"/>

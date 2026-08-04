@@ -7,10 +7,17 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using CznTranslator.Core.Config;
+using CznTranslator.Core.Models;
 using CznTranslator.Lookup;
 
-// UseWindowsForms is on for the tray, so System.Drawing.Brush is also in scope.
+// UseWindowsForms is on for the tray, so the WinForms/Drawing twins of these are also in scope;
+// pin every control type built in code to its WPF version.
 using Brush = System.Windows.Media.Brush;
+using Button = System.Windows.Controls.Button;
+using TextBox = System.Windows.Controls.TextBox;
+using Orientation = System.Windows.Controls.Orientation;
+using HorizontalAlignment = System.Windows.HorizontalAlignment;
+using VerticalAlignment = System.Windows.VerticalAlignment;
 
 namespace CznTranslator.App;
 
@@ -63,6 +70,8 @@ public partial class SettingsWindow : Window
             LoadDashboard();
         else if (Nav.SelectedIndex == 2)
             RefreshKeyStatus();
+        else if (Nav.SelectedIndex == 4)
+            LoadReview(0);
     }
 
     // ---------------------------------------------------------------- dashboard
@@ -252,6 +261,165 @@ public partial class SettingsWindow : Window
         catch (Exception ex)
         {
             KeyHint.Text = $"Ошибка: {ex.Message}";
+        }
+    }
+
+    // ------------------------------------------------------------------- review
+
+    private const int ReviewPageSize = 25;
+    private int _reviewOffset;
+
+    private void ReviewReload_Click(object sender, RoutedEventArgs e) => LoadReview(0);
+
+    private void LoadReview(int offset)
+    {
+        ReviewList.Children.Clear();
+        ReviewPager.Children.Clear();
+
+        if (_repository is null)
+        {
+            ReviewTitle.Text = "База не подключена.";
+            return;
+        }
+
+        int total;
+        IReadOnlyList<StringRow> rows;
+        try
+        {
+            total = _repository.CountByStatus(StringStatus.MachineTranslated);
+            rows = _repository.Page(StringStatus.MachineTranslated, ReviewPageSize, offset);
+        }
+        catch (Exception ex)
+        {
+            ReviewTitle.Text = $"Ошибка чтения базы: {ex.Message}";
+            return;
+        }
+
+        _reviewOffset = offset;
+        ReviewTitle.Text = $"Очередь — {total:N0} строк";
+
+        if (rows.Count == 0)
+        {
+            ReviewList.Children.Add(new TextBlock
+            {
+                Text = total == 0 ? "Очередь пуста 🎉" : "На этой странице пусто.",
+                Foreground = (Brush)FindResource("Muted"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 24, 0, 8),
+            });
+            return;
+        }
+
+        foreach (var row in rows)
+            ReviewList.Children.Add(BuildReviewCard(row));
+
+        BuildReviewPager(total, offset);
+    }
+
+    private Border BuildReviewCard(StringRow row)
+    {
+        var stack = new StackPanel();
+        stack.Children.Add(new TextBlock
+        {
+            Text = $"#{row.Id}  {row.Key ?? "(без ключа)"}",
+            Foreground = (Brush)FindResource("Muted"),
+            FontFamily = new System.Windows.Media.FontFamily("Cascadia Code, Consolas, monospace"),
+            FontSize = 11.5,
+        });
+        stack.Children.Add(new TextBlock
+        {
+            Text = row.English,
+            Foreground = (Brush)FindResource("Text1"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 5, 0, 8),
+        });
+
+        var ruBox = new TextBox
+        {
+            Text = row.Russian ?? string.Empty,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            MinHeight = 34,
+        };
+        stack.Children.Add(ruBox);
+
+        foreach (var warning in TranslationValidator.Validate(row.English, row.Russian))
+        {
+            stack.Children.Add(new TextBlock
+            {
+                Text = "⚠ " + warning,
+                Foreground = (Brush)FindResource("Accent"),
+                FontSize = 12,
+                Margin = new Thickness(0, 6, 0, 0),
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+
+        var card = new Border
+        {
+            Background = (Brush)FindResource("Panel2"),
+            BorderBrush = (Brush)FindResource("Border1"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(13),
+            Margin = new Thickness(0, 0, 0, 10),
+        };
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+        buttons.Children.Add(SmallButton("Принять", "Btn", () => SaveReview(row.Id, ruBox.Text, StringStatus.Reviewed, card)));
+        buttons.Children.Add(SmallButton("Принять и закрепить", "Ghost", () => SaveReview(row.Id, ruBox.Text, StringStatus.Locked, card)));
+        stack.Children.Add(buttons);
+
+        card.Child = stack;
+        return card;
+    }
+
+    private Button SmallButton(string content, string styleKey, Action onClick)
+    {
+        var button = new Button
+        {
+            Content = content,
+            Style = (Style)FindResource(styleKey),
+            Padding = new Thickness(12, 6, 12, 6),
+            FontSize = 12.5,
+            Margin = new Thickness(0, 0, 8, 0),
+        };
+        button.Click += (_, _) => onClick();
+        return button;
+    }
+
+    private void BuildReviewPager(int total, int offset)
+    {
+        if (offset > 0)
+            ReviewPager.Children.Add(SmallButton("← назад", "Ghost", () => LoadReview(Math.Max(0, offset - ReviewPageSize))));
+
+        ReviewPager.Children.Add(new TextBlock
+        {
+            Text = $"{offset + 1}–{Math.Min(offset + ReviewPageSize, total)} из {total:N0}",
+            Foreground = (Brush)FindResource("Muted"),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(4, 0, 4, 0),
+        });
+
+        if (offset + ReviewPageSize < total)
+            ReviewPager.Children.Add(SmallButton("вперёд →", "Ghost", () => LoadReview(offset + ReviewPageSize)));
+    }
+
+    private void SaveReview(long id, string russian, StringStatus status, Border card)
+    {
+        if (_repository is null)
+            return;
+
+        try
+        {
+            _repository.SetTranslation(id, russian, status);
+            ReviewList.Children.Remove(card);
+            if (ReviewList.Children.Count == 0)
+                LoadReview(_reviewOffset);
+        }
+        catch (Exception ex)
+        {
+            ReviewTitle.Text = $"Ошибка сохранения: {ex.Message}";
         }
     }
 

@@ -104,6 +104,49 @@ public sealed class StringRepository(TranslationDatabase database)
         return Convert.ToInt32(command.ExecuteScalar());
     }
 
+    public int CountByStatus(StringStatus status)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM strings WHERE status = $s;";
+        command.Parameters.AddWithValue("$s", ToDb(status));
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    /// <summary>One page of rows in a status, oldest id first — the review queue and the translate feed.</summary>
+    public IReadOnlyList<StringRow> Page(StringStatus status, int limit, int offset)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT id, key, table_name, en, ru, norm, status, src, pack_version
+            FROM strings WHERE status = $s ORDER BY id LIMIT $limit OFFSET $offset;
+            """;
+        command.Parameters.AddWithValue("$s", ToDb(status));
+        command.Parameters.AddWithValue("$limit", limit);
+        command.Parameters.AddWithValue("$offset", offset);
+
+        var rows = new List<StringRow>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            rows.Add(Read(reader));
+        return rows;
+    }
+
+    /// <summary>Writes a translation and moves the row's status (review accept, or a model write-back).</summary>
+    public void SetTranslation(long id, string? russian, StringStatus status)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE strings SET ru = $ru, status = $status, updated_at = $now WHERE id = $id;";
+        command.Parameters.AddWithValue("$ru", (object?)russian ?? DBNull.Value);
+        command.Parameters.AddWithValue("$status", ToDb(status));
+        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        command.Parameters.AddWithValue("$id", id);
+        command.ExecuteNonQuery();
+    }
+
     /// <summary>Raw <c>status → count</c> over the whole table, for the settings dashboard.</summary>
     public IReadOnlyDictionary<string, int> StatusCounts()
     {
