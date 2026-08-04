@@ -8,6 +8,7 @@ import diff_pack
 import translate
 from czn.db import STATUS_MT, STATUS_NEW, STATUS_REVIEWED, STATUS_STALE, Database
 from czn.ollama import (
+    SYSTEM_PROMPT,
     BatchTranslationError,
     TranslationItem,
     build_prompt,
@@ -162,6 +163,14 @@ class TestBatchProtocol:
     def test_glossary_rendering(self):
         assert render_glossary({"Boss": "Босс"}) == "- Boss = Босс"
         assert render_glossary({}) == "(пусто)"
+
+    def test_system_prompt_formats_with_a_glossary(self):
+        """The prompt is only built inside a real model call, which no stub exercises — so the
+        literal {0}/{value} examples in its rules text must stay escaped or .format() blows up."""
+        rendered = SYSTEM_PROMPT.format(glossary=render_glossary({"Boss": "Босс"}))
+        assert "- Boss = Босс" in rendered
+        # The placeholder examples survive as literals for the model to read.
+        assert "{0}" in rendered and "{value}" in rendered
 
 
 class StubClient:
