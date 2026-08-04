@@ -209,9 +209,16 @@ PAGE = r"""<!doctype html>
   <section id="update">
     <div class="head"><h1>Обновление после патча</h1><p>Пере-декодировать data.pack, сравнить с базой, перевести только изменения.</p></div>
     <div class="card">
-      <h2>Как это работает</h2>
-      <p class="sub">Новые строки → в очередь; изменённые → «stale» (старый перевод остаётся запасным); удалённые → сохраняются; ваш ручной перевод не теряется.</p>
-      <div class="hint" id="updInfo">Модуль подключается — здесь будут «Проверить обновление» и «Применить + перевести».</div>
+      <h2>Источник</h2>
+      <p class="sub">Новые → в очередь; изменённые → «stale» (старый перевод остаётся запасным); удалённые → сохраняются; ваш ручной перевод не теряется. Потом добейте новые/устаревшие во вкладке «Перевод».</p>
+      <label class="f"><span>Путь к data.pack</span><input type="text" id="updPack" placeholder="…/cznlive/data.pack"></label>
+      <div class="actions">
+        <button class="btn ghost" id="updCheck">Проверить обновление</button>
+        <button class="btn" id="updApply">Применить изменения</button>
+        <span class="hint" id="updHint">Извлечение занимает ~1 минуту.</span>
+      </div>
+      <div class="tiles" id="updTiles" style="margin-top:16px;display:none"></div>
+      <div class="console" id="updLog" style="display:none"></div>
     </div>
   </section>
 </main>
@@ -306,6 +313,33 @@ async function saveRev(id,status){
   try{ await api('POST','/api/review/save',{id,ru,status}); const el=$('#rev-'+id); el.style.display='none'; refresh(); }
   catch(e){ toast(e.message,true); } }
 $('#revReload').onclick=()=>loadReview(0);
+
+// update after patch
+let updPoll;
+function renderUpd(j){
+  if(j.defaultPack && !$('#updPack').value) $('#updPack').value=j.defaultPack;
+  $('#updLog').innerHTML = j.log.map(l=>l.startsWith('$')?`<span class="cmd">${esc(l)}</span>`:esc(l)).join('\n');
+  $('#updLog').scrollTop=$('#updLog').scrollHeight;
+  const s=j.summary||{};
+  if(Object.keys(s).length){ $('#updTiles').style.display='';
+    const map=[['new','Новые','accent'],['changed','Изменены','accent'],['removed','Удалены',''],['unchanged','Без изменений','']];
+    $('#updTiles').innerHTML=map.map(m=>`<div class="tile ${m[2]}"><div class="n">${fmt(s[m[0]]||0)}</div><div class="l">${m[1]}</div></div>`).join(''); }
+  $('#updHint').textContent = j.running ? ('Идёт: '+j.phase+'…')
+    : (j.returncode===0?'Готово.':(j.returncode===null?'Извлечение занимает ~1 минуту.':'Ошибка (код '+j.returncode+')'));
+  const busy=j.running||!j.extractorAvailable; $('#updCheck').disabled=busy; $('#updApply').disabled=busy;
+  if(!j.extractorAvailable) $('#updHint').textContent='Экстрактор не найден: extracted/scripts/extract_pack.py';
+}
+function pollUpdate(){ clearInterval(updPoll);
+  const tick=async()=>{ let j; try{ j=await api('GET','/api/update/job'); }catch(e){ return; }
+    renderUpd(j); if(!j.running){ clearInterval(updPoll); refresh(); } };
+  tick(); updPoll=setInterval(tick,1500);
+}
+$('#updCheck').onclick=async()=>{ try{ await api('POST','/api/update/check',{packPath:$('#updPack').value.trim()});
+  $('#updLog').style.display=''; toast('Проверка запущена'); pollUpdate(); }catch(e){ toast(e.message,true); } };
+$('#updApply').onclick=async()=>{ if(!confirm('Извлечь из data.pack и применить изменения к базе?')) return;
+  try{ await api('POST','/api/update/apply',{packPath:$('#updPack').value.trim()});
+    $('#updLog').style.display=''; toast('Применение запущено'); pollUpdate(); }catch(e){ toast(e.message,true); } };
+(async()=>{ try{ renderUpd(await api('GET','/api/update/job')); }catch(e){} })();
 
 refresh(); setInterval(refresh,5000);
 </script>

@@ -31,6 +31,12 @@ from czn.validate import validate
 HERE = Path(__file__).resolve().parent
 ENV_PATH = HERE / ".env"
 TRANSLATE = HERE / "translate.py"
+DIFF = HERE / "diff_pack.py"
+
+# The re-extractor and its output live under extracted/ (gitignored — game content stays local).
+EXTRACT = HERE.parent / "extracted" / "scripts" / "extract_pack.py"
+PAIRS_OUT = HERE.parent / "extracted" / "text" / "en.pairs.json"
+DEFAULT_PACK = r"C:\ProgramData\Smilegate\Games\ChaosZeroNightmare\bin\appdata\cznlive\data.pack"
 
 KEY_ENV = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
 
@@ -163,11 +169,89 @@ class TranslationJob:
         }
 
 
+class CommandJob:
+    """Runs a sequence of subprocesses (extract, then diff), stopping at the first failure.
+
+    Used by the patch-update flow, where 'phase' matters more than a percentage: re-decoding the
+    pack takes about a minute and either finishes or not.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._proc: subprocess.Popen | None = None
+        self._log: deque[str] = deque(maxlen=400)
+        self.running = False
+        self.returncode: int | None = None
+        self.phase = ""
+        self.summary: dict[str, int] = {}
+
+    def start(self, steps: list[tuple[str, list[str]]]) -> bool:
+        with self._lock:
+            if self.running:
+                return False
+            self.running = True
+            self.returncode = None
+            self.phase = ""
+            self.summary = {}
+            self._log.clear()
+        threading.Thread(target=self._run, args=(steps,), daemon=True).start()
+        return True
+
+    def _parse_summary(self, line: str) -> None:
+        # "Diff against the base: new 12, changed 3, removed 1, unchanged 106810"
+        parts = line.split(":", 1)[1].replace(",", "").split() if ":" in line else []
+        it = iter(parts)
+        for name in it:
+            try:
+                self.summary[name] = int(next(it))
+            except (StopIteration, ValueError):
+                break
+
+    def _run(self, steps: list[tuple[str, list[str]]]) -> None:
+        try:
+            for label, cmd in steps:
+                self.phase = label
+                self._log.append(f"$ [{label}] {Path(cmd[1]).name} {' '.join(cmd[2:])}")
+                self._proc = subprocess.Popen(
+                    cmd, cwd=str(HERE), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace", bufsize=1,
+                )
+                for line in self._proc.stdout:  # type: ignore[union-attr]
+                    line = line.rstrip()
+                    self._log.append(line)
+                    if line.startswith("Diff against the base:"):
+                        self._parse_summary(line)
+                rc = self._proc.wait()
+                if rc != 0:
+                    self.returncode = rc
+                    self._log.append(f"[{label}] завершено с кодом {rc}")
+                    return
+            self.returncode = 0
+        except Exception as error:  # noqa: BLE001
+            self._log.append(f"panel: {error}")
+            self.returncode = -1
+        finally:
+            self.running = False
+            self.phase = ""
+            self._proc = None
+
+    def snapshot(self) -> dict:
+        return {
+            "running": self.running,
+            "returncode": self.returncode,
+            "phase": self.phase,
+            "summary": self.summary,
+            "log": list(self._log),
+        }
+
+
 # --------------------------------------------------------------------------- server
 
 class PanelHandler(BaseHTTPRequestHandler):
     database: Database
+    db_path: Path
     job: TranslationJob
+    update_job: CommandJob
 
     def log_message(self, fmt: str, *args) -> None:  # noqa: A002 - stdlib signature
         pass
@@ -244,6 +328,13 @@ class PanelHandler(BaseHTTPRequestHandler):
             self._send_json(self._review_page(offset))
             return
 
+        if path == "/api/update/job":
+            snap = self.update_job.snapshot()
+            snap["defaultPack"] = DEFAULT_PACK
+            snap["extractorAvailable"] = EXTRACT.exists()
+            self._send_json(snap)
+            return
+
         self.send_error(404)
 
     def do_POST(self) -> None:
@@ -285,6 +376,25 @@ class PanelHandler(BaseHTTPRequestHandler):
 
         if path == "/api/job/stop":
             self.job.stop()
+            self._send_json({"ok": True})
+            return
+
+        if path in ("/api/update/check", "/api/update/apply"):
+            if not EXTRACT.exists():
+                self._send_json({"error": f"extractor not found at {EXTRACT}"}, 400)
+                return
+            pack = str(payload.get("packPath") or DEFAULT_PACK)
+            if not Path(pack).is_file():
+                self._send_json({"error": f"data.pack not found: {pack}"}, 400)
+                return
+            extract_step = ("Извлечение", [sys.executable, str(EXTRACT), "--pack", pack, "--out", str(PAIRS_OUT), "--lang", "en"])
+            if path == "/api/update/check":
+                diff_step = ("Сравнение", [sys.executable, str(DIFF), "--pairs", str(PAIRS_OUT), "--db", str(self.db_path), "--dry-run"])
+            else:
+                diff_step = ("Применение", [sys.executable, str(DIFF), "--pairs", str(PAIRS_OUT), "--db", str(self.db_path), "--pack", pack, "--note", "panel update"])
+            if not self.update_job.start([extract_step, diff_step]):
+                self._send_json({"error": "an update is already running"}, 409)
+                return
             self._send_json({"ok": True})
             return
 
@@ -342,7 +452,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     PanelHandler.database = Database(args.db)
+    PanelHandler.db_path = args.db
     PanelHandler.job = TranslationJob(args.db)
+    PanelHandler.update_job = CommandJob()
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), PanelHandler)
     url = f"http://127.0.0.1:{args.port}"

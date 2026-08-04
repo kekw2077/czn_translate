@@ -304,3 +304,44 @@ class TestTranslateScript:
         self._run(monkeypatch, db_path, client, ["--limit", "3"])
 
         assert sum(len(batch) for batch in client.batches) == 3
+
+
+class TestPairsDiff:
+    """diff_pack.py --pairs: the patch path that works off our decoded pairs.json, not a dump."""
+
+    def test_load_pairs_matches_read_dump_shape(self, tmp_path):
+        path = tmp_path / "en.pairs.json"
+        path.write_text(json.dumps({"a": "Alpha", "b": "Bravo", "blank": "  "}), encoding="utf-8")
+
+        current = diff_pack.load_pairs_as_current(path)
+
+        assert current == {"a": ("Alpha", "text/en"), "b": ("Bravo", "text/en")}  # blank dropped
+
+    def test_pairs_diff_marks_new_changed_and_stale(self, tmp_path):
+        db_path = tmp_path / "czn.db"
+        database = Database(db_path)
+        database.ensure_created()
+        with database.connect() as connection:
+            database.record_pack_version(connection, "v1")
+            database.upsert_string(connection, en="Alpha", ru="Альфа", key="a", status=STATUS_REVIEWED, pack_version=1)
+            database.upsert_string(connection, en="Bravo", ru="Браво", key="b", status=STATUS_REVIEWED, pack_version=1)
+
+        pairs = tmp_path / "en.pairs.json"
+        pairs.write_text(json.dumps({"a": "Alpha", "b": "Bravo changed", "c": "Charlie"}), encoding="utf-8")
+
+        assert diff_pack.main(["--pairs", str(pairs), "--db", str(db_path)]) == 0
+
+        with database.connect() as connection:
+            changed = database.get_by_key(connection, "b")
+            added = database.get_by_key(connection, "c")
+            unchanged = database.get_by_key(connection, "a")
+
+        assert changed.status == STATUS_STALE and changed.ru == "Браво"  # patched, old ru kept
+        assert added.status == STATUS_NEW and added.en == "Charlie"
+        assert unchanged.status == STATUS_REVIEWED  # untouched
+
+    def test_pairs_and_dump_are_mutually_exclusive(self, tmp_path, capsys):
+        db_path = tmp_path / "czn.db"
+        Database(db_path).ensure_created()
+        assert diff_pack.main(["--db", str(db_path)]) == 1  # neither given
+        assert "exactly one" in capsys.readouterr().err

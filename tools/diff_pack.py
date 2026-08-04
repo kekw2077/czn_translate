@@ -13,6 +13,7 @@ and the review effort that went into it is not recoverable once it is gone.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +22,18 @@ from czn.db import SRC_PACK, STATUS_NEW, STATUS_STALE, Database
 from czn.dump import load_table_specs, read_dump
 from czn.normalize import norm_hash, normalize
 from import_dump import DEFAULT_TABLES, md5_of
+
+
+def load_pairs_as_current(path: Path, table_name: str = "text/en") -> dict[str, tuple[str, str]]:
+    """A decoded {key: english} JSON, in the same shape read_dump returns, so the diff is identical.
+
+    Blank values are dropped to match import_pairs.py — a key that lost its text in a patch then
+    reads as 'removed' rather than 'changed to empty'.
+    """
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} is not a JSON object of key -> string")
+    return {key: (text, table_name) for key, text in payload.items() if isinstance(text, str) and text.strip()}
 
 
 @dataclass
@@ -99,7 +112,8 @@ def apply(database: Database, connection, current: dict[str, tuple[str, str]], r
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--dump", required=True, type=Path, help="new AssetRipper export")
+    parser.add_argument("--dump", type=Path, help="new AssetRipper/SQLite dump directory")
+    parser.add_argument("--pairs", type=Path, help="new key->english JSON (from extract_pack.py)")
     parser.add_argument("--db", type=Path, default=Path("czn.db"))
     parser.add_argument("--tables", type=Path, default=DEFAULT_TABLES)
     parser.add_argument("--pack", type=Path, help="new data.pack, hashed into pack_versions")
@@ -107,12 +121,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="report only, change nothing")
     args = parser.parse_args(argv)
 
-    if not args.db.exists():
-        print(f"{args.db} does not exist — run import_dump.py first.", file=sys.stderr)
+    if bool(args.dump) == bool(args.pairs):
+        print("Give exactly one source: --pairs (our decode) or --dump (AssetRipper/SQLite).", file=sys.stderr)
         return 1
 
-    specs = [spec for spec in load_table_specs(args.tables) if spec.include]
-    current = read_dump(args.dump, specs)
+    if not args.db.exists():
+        print(f"{args.db} does not exist — run import_pairs.py first.", file=sys.stderr)
+        return 1
+
+    if args.pairs:
+        if not args.pairs.is_file():
+            print(f"{args.pairs} is not a file", file=sys.stderr)
+            return 1
+        current = load_pairs_as_current(args.pairs)
+    else:
+        if not args.dump.is_dir():
+            print(f"{args.dump} is not a directory", file=sys.stderr)
+            return 1
+        specs = [spec for spec in load_table_specs(args.tables) if spec.include]
+        current = read_dump(args.dump, specs)
 
     database = Database(args.db)
     with database.connect() as connection:
