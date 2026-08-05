@@ -226,6 +226,7 @@ public partial class SettingsWindow : Window
 
     private void ProvAnthropic_Click(object sender, RoutedEventArgs e) => SetKeyProvider("anthropic");
     private void ProvOpenai_Click(object sender, RoutedEventArgs e) => SetKeyProvider("openai");
+    private void ProvDeepseek_Click(object sender, RoutedEventArgs e) => SetKeyProvider("deepseek");
 
     private void SetKeyProvider(string provider)
     {
@@ -234,13 +235,17 @@ public partial class SettingsWindow : Window
         var ghost = (Style)FindResource("Ghost");
         ProvAnthropic.Style = provider == "anthropic" ? primary : ghost;
         ProvOpenai.Style = provider == "openai" ? primary : ghost;
+        ProvDeepseek.Style = provider == "deepseek" ? primary : ghost;
     }
 
     private void RefreshKeyStatus()
     {
         var anthropic = _secrets.Has(SecretStore.AnthropicKey);
         var openai = _secrets.Has(SecretStore.OpenAiKey);
-        KeyStatus.Text = $"Anthropic — {(anthropic ? "ключ есть ✓" : "нет")}   ·   OpenAI — {(openai ? "ключ есть ✓" : "нет")}";
+        var deepseek = _secrets.Has(SecretStore.DeepSeekKey);
+        KeyStatus.Text = $"Anthropic — {(anthropic ? "ключ есть ✓" : "нет")}   ·   "
+                       + $"OpenAI — {(openai ? "ключ есть ✓" : "нет")}   ·   "
+                       + $"DeepSeek — {(deepseek ? "ключ есть ✓" : "нет")}";
     }
 
     private void SaveKey_Click(object sender, RoutedEventArgs e)
@@ -252,7 +257,7 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        var name = _keyProvider == "anthropic" ? SecretStore.AnthropicKey : SecretStore.OpenAiKey;
+        var name = SecretStore.NameFor(_keyProvider);
         try
         {
             _secrets.Set(name, key);
@@ -433,6 +438,7 @@ public partial class SettingsWindow : Window
 
     private void TransProvAnthropic_Click(object sender, RoutedEventArgs e) => SetTransProvider("anthropic");
     private void TransProvOpenai_Click(object sender, RoutedEventArgs e) => SetTransProvider("openai");
+    private void TransProvDeepseek_Click(object sender, RoutedEventArgs e) => SetTransProvider("deepseek");
 
     private void SetTransProvider(string provider)
     {
@@ -441,6 +447,7 @@ public partial class SettingsWindow : Window
         var ghost = (Style)FindResource("Ghost");
         TransProvAnthropic.Style = provider == "anthropic" ? primary : ghost;
         TransProvOpenai.Style = provider == "openai" ? primary : ghost;
+        TransProvDeepseek.Style = provider == "deepseek" ? primary : ghost;
     }
 
     private async void Translate_Click(object sender, RoutedEventArgs e)
@@ -451,7 +458,7 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        var secretName = _transProvider == "anthropic" ? SecretStore.AnthropicKey : SecretStore.OpenAiKey;
+        var secretName = SecretStore.NameFor(_transProvider);
         var apiKey = _secrets.Get(secretName);
         if (string.IsNullOrEmpty(apiKey))
         {

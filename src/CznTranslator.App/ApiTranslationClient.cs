@@ -27,11 +27,13 @@ public sealed partial class ApiTranslationClient
     {
         ["anthropic"] = "claude-haiku-4-5-20251001",
         ["openai"] = "gpt-4o-mini",
+        ["deepseek"] = "deepseek-chat",
     };
     private static readonly Dictionary<string, string> DefaultBaseUrls = new()
     {
         ["anthropic"] = "https://api.anthropic.com",
         ["openai"] = "https://api.openai.com/v1",
+        ["deepseek"] = "https://api.deepseek.com",
     };
 
     [GeneratedRegex(@"^\s*```(?:json)?\s*(.*?)\s*```\s*$", RegexOptions.Singleline)]

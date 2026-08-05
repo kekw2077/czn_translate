@@ -14,6 +14,15 @@ public sealed class SecretStore
 {
     public const string AnthropicKey = "ANTHROPIC_API_KEY";
     public const string OpenAiKey = "OPENAI_API_KEY";
+    public const string DeepSeekKey = "DEEPSEEK_API_KEY";
+
+    /// <summary>Maps a provider id (anthropic / openai / deepseek) to its stored secret name.</summary>
+    public static string NameFor(string provider) => provider switch
+    {
+        "anthropic" => AnthropicKey,
+        "deepseek" => DeepSeekKey,
+        _ => OpenAiKey,
+    };
 
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("CznTranslator.SecretStore.v1");
 

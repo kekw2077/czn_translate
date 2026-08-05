@@ -284,6 +284,8 @@
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                                 <Button x:Name="ProvAnthropic" Style="{StaticResource Ghost}" Content="Anthropic (Claude)"
                                         Margin="0,0,8,0" Click="ProvAnthropic_Click"/>
+                                <Button x:Name="ProvDeepseek" Style="{StaticResource Ghost}" Content="DeepSeek"
+                                        Margin="0,0,8,0" Click="ProvDeepseek_Click"/>
                                 <Button x:Name="ProvOpenai" Style="{StaticResource Ghost}" Content="OpenAI-совместимый"
                                         Click="ProvOpenai_Click"/>
                             </StackPanel>
@@ -307,6 +309,8 @@
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
                                 <Button x:Name="TransProvAnthropic" Style="{StaticResource Ghost}" Content="Anthropic (Claude)"
                                         Margin="0,0,8,0" Click="TransProvAnthropic_Click"/>
+                                <Button x:Name="TransProvDeepseek" Style="{StaticResource Ghost}" Content="DeepSeek"
+                                        Margin="0,0,8,0" Click="TransProvDeepseek_Click"/>
                                 <Button x:Name="TransProvOpenai" Style="{StaticResource Ghost}" Content="OpenAI-совместимый"
                                         Click="TransProvOpenai_Click"/>
                             </StackPanel>
