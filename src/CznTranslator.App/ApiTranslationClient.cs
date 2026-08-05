@@ -110,6 +110,7 @@ public sealed partial class ApiTranslationClient
             {
                 model = Model,
                 temperature = Temperature,
+                max_tokens = MaxOutputTokens,
                 messages = new[]
                 {
                     new { role = "system", content = system },
