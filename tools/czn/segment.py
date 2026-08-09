@@ -33,7 +33,9 @@ from dataclasses import dataclass
 MARKER = re.compile(
     r'<[^>]*>'
     r'|\{[^{}]*\}'
-    r'|#[A-Za-z0-9_]+#'
+    # '+' and '.' appear inside variable names (#tv+#, #+rev_0_1#). Spaces are still
+    # forbidden, so a name can never run from one '#' across prose to an unrelated one.
+    r'|#[A-Za-z0-9_+.\-]+#'
     r'|\[[a-zA-Z/]+\]'
     r'|%[sd]'
     r'|\$[A-Za-z0-9_][^$<>\n]*\$'

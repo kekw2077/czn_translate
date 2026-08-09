@@ -364,5 +364,15 @@ class TestMarkerPattern:
     def test_every_marker_family_is_recognised(self, text, expected):
         assert MARKER.findall(text) == expected
 
+    @pytest.mark.parametrize("text", ["#tv+#", "#+rev_0_1#", "#dmg_attr.leech_0#"])
+    def test_variable_names_may_carry_a_sign_or_a_dot(self, text):
+        # Ten strings in the real corpus use these; without them a '#tv+#' would survive into
+        # the overlay and be drawn on screen as those literal characters.
+        assert MARKER.findall(text) == [text]
+
+    def test_a_variable_name_never_runs_across_prose(self):
+        # Spaces stay forbidden, so one '#' cannot reach an unrelated one further along.
+        assert MARKER.findall("item #1 and #2 here") == []
+
     def test_a_bare_dollar_is_not_a_marker(self):
         assert MARKER.findall("I'll pay top dollar for it!") == []
