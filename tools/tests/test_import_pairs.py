@@ -37,6 +37,9 @@ class TestDisplayText:
             ("Restores %s health", "Restores %s health"),
             ("First<br>Second", "First\nSecond"),
             ("   <#D72144> \"...\"", '"..."'),
+            # A translated keyword still strips to its inner word, delimiters and all.
+            ("<b>$Щит$</b>", "Щит"),
+            ("Наносит $Фикс. урон$ всем", "Наносит Фикс. урон всем"),
         ],
     )
     def test_markup_is_reduced_to_what_a_player_sees(self, raw, expected):

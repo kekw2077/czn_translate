@@ -28,7 +28,7 @@ import sys
 import time
 from pathlib import Path
 
-from czn.segment import display_text, mask_string, rebuild
+from czn.segment import collect_keywords, display_text, mask_string, rebuild
 from czn.station import build_station
 
 # Kept out of czn.db so this file stays stdlib-only; these are the same string values schema uses.
@@ -88,6 +88,11 @@ def pending_segments(sources: list[str], memory: dict[str, str]) -> list[str]:
     return list(seen)
 
 
+def pending_terms(sources: list[str], glossary: dict[str, str]) -> list[str]:
+    """Keyword terms ($Shield$) not yet in the glossary — translated once, reused everywhere."""
+    return [term for term in collect_keywords(sources) if term not in glossary]
+
+
 def translate_into(
     station,
     todo: list[str],
@@ -123,16 +128,16 @@ def apply_rows(
     connection: sqlite3.Connection,
     rows: list[sqlite3.Row],
     segments: dict[str, str],
+    glossary: dict[str, str],
 ) -> tuple[int, int, int, list[dict]]:
     """Rebuilds each row's Russian from the memory and writes the covered ones as ``mt``.
 
     A row is only touched when at least one of its translatable segments came back, so a string the
     station could not manage is left ``new`` for the next pass rather than being marked done.
 
-    Keywords (``$Shield$``) are left as their English term: an empty glossary means ``rebuild``
-    restores ``$Shield$`` and ``display_text`` strips it to ``Shield``. Substituting a Russian term
-    would re-wrap it as ``$Щит$``, which ``display_text`` cannot strip (its keyword pattern needs an
-    ASCII first character), so the delimiters would leak onto the screen.
+    Keywords (``$Shield$``) are resolved through ``glossary``: a translated term is substituted and
+    ``display_text`` strips it to its inner word regardless of script (``$Щит$`` -> ``Щит``); a term
+    with no translation falls back to English (``$Shield$`` -> ``Shield``).
     """
     written = partial = untouched = 0
     problems: list[dict] = []
@@ -148,7 +153,7 @@ def apply_rows(
             untouched += 1
             continue
 
-        text, issues = rebuild(masked, segments)
+        text, issues = rebuild(masked, segments, glossary)
         ru = display_text(text)
         if issues:
             problems.append({"en": source, "ru": ru, "issues": issues})
@@ -182,24 +187,37 @@ def fill(
     progress(f"Pending rows: {len(rows):,}")
 
     seg_path = work / "segments_ru.json"
+    glo_path = work / "glossary_ru.json"
     segments = load_memory(seg_path)
+    glossary = load_memory(glo_path)
 
     todo_segments = pending_segments(sources, segments)
-    total = len(todo_segments)
+    todo_terms = pending_terms(sources, glossary)
+    total = len(todo_segments) + len(todo_terms)
     progress(
-        f"Memory: {len(segments):,} segment(s). To do: {len(todo_segments):,} segment(s)."
+        f"Memory: {len(segments):,} segment(s), {len(glossary):,} term(s). "
+        f"To do: {len(todo_segments):,} segment(s) + {len(todo_terms):,} term(s)."
     )
     progress(f"PROGRESS 0 {max(total, 1)}")
 
+    done = 0
     rejected: list[str] = []
-    if todo_segments:
-        _, rejected = translate_into(
-            station, todo_segments, segments, seg_path, chunk, 0, total, progress
+    # Keywords first: they are plain words, so they translate fast and the segment pass can then
+    # reuse them. A term that comes back empty or with a stray marker is left English.
+    if todo_terms:
+        done, term_rejected = translate_into(
+            station, todo_terms, glossary, glo_path, chunk, done, total, progress
         )
+        rejected.extend(term_rejected)
+    if todo_segments:
+        done, seg_rejected = translate_into(
+            station, todo_segments, segments, seg_path, chunk, done, total, progress
+        )
+        rejected.extend(seg_rejected)
 
     progress(f"PROGRESS {max(total, 1)} {max(total, 1)}")
 
-    written, partial, untouched, problems = apply_rows(connection, rows, segments)
+    written, partial, untouched, problems = apply_rows(connection, rows, segments, glossary)
 
     if rejected:
         (work / "station_failed.txt").write_text("\n".join(rejected) + "\n", encoding="utf-8")
@@ -215,6 +233,7 @@ def fill(
         "untouched": untouched,
         "rejected": len(rejected),
         "segments": len(segments),
+        "terms": len(glossary),
     }
     progress(
         f"Wrote {written:,} row(s) as '{STATUS_MT}' "

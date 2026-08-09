@@ -49,6 +49,12 @@ LINE_BREAK = re.compile(r'(<br\s*/?>)', re.IGNORECASE)
 SENTINEL = "[{index}]"
 SENTINEL_RE = re.compile(r'\[\s*(\d+)\s*\]')
 
+#: A keyword as it looks once rebuilt, for stripping to its inner word on the display path. Unlike
+#: MARKER's keyword rule it does not require an ASCII first character, so a translated ``$Щит$``
+#: strips to ``Щит`` instead of leaking its delimiters onto the screen. Excludes ``<>`` so it can
+#: never run across a tag boundary.
+_DISPLAY_KEYWORD = re.compile(r'\$([^$<>\n]+)\$')
+
 _LETTER = re.compile(r'[^\W\d_]', re.UNICODE)
 
 
@@ -233,10 +239,14 @@ def display_text(raw: str) -> str:
     """
     text = LINE_BREAK.sub("\n", raw)
 
+    # Keywords first and script-agnostically: a source ``$Shield$`` and a glossary-substituted
+    # ``$Щит$`` both collapse to their inner word here, before the structural pass runs.
+    text = _DISPLAY_KEYWORD.sub(lambda m: m.group(1), text)
+
     def replace(match: re.Match[str]) -> str:
         marker = match.group(0)
-        if is_keyword(marker):
-            return keyword_term(marker)
+        # {0} and %s stand for a value the game fills in, so they stay; the rest of the structural
+        # markup (tags, #icon#, [directive]) renders as nothing.
         if marker.startswith("{") or marker.startswith("%"):
             return marker
         return ""

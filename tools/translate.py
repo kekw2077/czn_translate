@@ -188,7 +188,9 @@ def main(argv: list[str] | None = None) -> int:
         for row_id, m in masked.items():
             if not any(seg.masked in segments for seg in m.translatable_segments):
                 continue
-            text, _ = rebuild(m, segments)
+            # The curated glossary resolves keywords ($Shield$ -> $Щит$), and display_text strips
+            # the delimiters either way; a term not in it falls back to English.
+            text, _ = rebuild(m, segments, glossary)
             ru = display_text(text)
             if not ru:
                 continue

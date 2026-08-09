@@ -72,7 +72,10 @@ def test_fill_masks_translates_and_writes_display_text(tmp_path):
     ])
 
     station = FakeStation(
-        mapping={"[0]Deal [1] to all[2]": "[0]Наносит [1] всем[2]"},
+        mapping={
+            "[0]Deal [1] to all[2]": "[0]Наносит [1] всем[2]",
+            "Fixed Damage": "Фикс. урон",  # the $Fixed Damage$ keyword, translated as a term
+        },
         reject={"Hello world"},
     )
     # k3 comes from memory, not the station.
@@ -87,8 +90,9 @@ def test_fill_masks_translates_and_writes_display_text(tmp_path):
     finally:
         connection.close()
 
-    # k1: markup restored around the translation, then stripped for display; keyword left in English.
-    assert fetch(path, "k1") == ("Наносит Fixed Damage всем", "mt")
+    # k1: markup restored around the translation, then stripped for display; the $Fixed Damage$
+    # keyword is translated as a term and its delimiters do not leak (display_text strips $Фикс…$).
+    assert fetch(path, "k1") == ("Наносит Фикс. урон всем", "mt")
     # k2: its only segment was rejected, so it is left untouched for a later pass.
     assert fetch(path, "k2") == (None, "new")
     # k3: filled from the pre-seeded memory without the station being asked.
