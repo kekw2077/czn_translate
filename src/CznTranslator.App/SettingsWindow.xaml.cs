@@ -49,13 +49,14 @@ public partial class SettingsWindow : Window
         _configPath = configPath;
         InitializeComponent();
 
-        _pages = [PageDash, PageOverlay, PageKey, PageTranslate, PageReview, PageUpdate];
+        _pages = [PageDash, PageOverlay, PageKey, PageTranslate, PageStation, PageReview, PageUpdate];
 
         LoadOverlayFields();
         LoadDashboard();
         SetKeyProvider("anthropic");
         SetTransProvider("anthropic");
         RefreshKeyStatus();
+        LoadStationFields();
         InitUpdateTab();
         Footer.Text = $"База: {Path.GetFileName(_repository?.Database.DatabasePath ?? "нет")}";
     }
@@ -68,11 +69,13 @@ public partial class SettingsWindow : Window
         for (var i = 0; i < _pages.Length; i++)
             _pages[i].Visibility = i == Nav.SelectedIndex ? Visibility.Visible : Visibility.Collapsed;
 
-        if (Nav.SelectedIndex == 0)
+        // By page object, not a magic index, so inserting a tab does not silently rewire these.
+        var page = Nav.SelectedIndex >= 0 && Nav.SelectedIndex < _pages.Length ? _pages[Nav.SelectedIndex] : null;
+        if (page == PageDash)
             LoadDashboard();
-        else if (Nav.SelectedIndex == 2)
+        else if (page == PageKey)
             RefreshKeyStatus();
-        else if (Nav.SelectedIndex == 4)
+        else if (page == PageReview)
             LoadReview(0);
     }
 
@@ -718,5 +721,248 @@ public partial class SettingsWindow : Window
             if (!Uri.IsHexDigit(text[i]))
                 return false;
         return true;
+    }
+
+    // ------------------------------------------------------------------ station
+
+    private const string StationDefaultEndpoint = "http://127.0.0.1:11434";
+    private const string StationDefaultModel = "qwen3:4b";
+
+    private CancellationTokenSource? _stationCts;
+    private readonly List<string> _stationLog = [];
+
+    private sealed record StationSettings(string Endpoint, string Model, int Batch, int Timeout, int Retries);
+
+    private void LoadStationFields()
+    {
+        try
+        {
+            var root = JsonNode.Parse(File.ReadAllText(_configPath))?.AsObject();
+            var st = root?["station"] as JsonObject;
+            var sync = root?["sync"] as JsonObject;
+            StationEndpoint.Text = StStr(st, "endpoint") ?? StStr(sync, "ollamaEndpoint") ?? StationDefaultEndpoint;
+            StationModel.Text = StStr(st, "model") ?? StationDefaultModel;
+            StationBatch.Text = (StInt(st, "batch") ?? 25).ToString(CultureInfo.InvariantCulture);
+            StationTimeout.Text = (StInt(st, "timeoutSeconds") ?? 300).ToString(CultureInfo.InvariantCulture);
+            StationRetries.Text = (StInt(st, "retries") ?? 2).ToString(CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            StationEndpoint.Text = StationDefaultEndpoint;
+            StationModel.Text = StationDefaultModel;
+            StationBatch.Text = "25";
+            StationTimeout.Text = "300";
+            StationRetries.Text = "2";
+        }
+    }
+
+    private static string? StStr(JsonObject? o, string key) =>
+        o is not null && o.TryGetPropertyValue(key, out var n) && n is JsonValue v && v.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s)
+            ? s : null;
+
+    private static int? StInt(JsonObject? o, string key)
+    {
+        if (o is not null && o.TryGetPropertyValue(key, out var n) && n is JsonValue v)
+        {
+            if (v.TryGetValue<int>(out var i)) return i;
+            if (v.TryGetValue<double>(out var d)) return (int)d;
+            if (v.TryGetValue<string>(out var s) && int.TryParse(s, out var si)) return si;
+        }
+        return null;
+    }
+
+    private bool TryReadStationFields(out StationSettings settings, out string error)
+    {
+        settings = new StationSettings(StationDefaultEndpoint, StationDefaultModel, 25, 300, 2);
+        var endpoint = StationEndpoint.Text?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(endpoint) || !(endpoint.StartsWith("http://") || endpoint.StartsWith("https://")))
+        {
+            error = "Адрес станции должен начинаться с http:// или https://";
+            return false;
+        }
+        var model = string.IsNullOrWhiteSpace(StationModel.Text) ? StationDefaultModel : StationModel.Text.Trim();
+        int Parse(string? t, int fallback) => int.TryParse(t?.Trim(), out var v) && v > 0 ? v : fallback;
+        settings = new StationSettings(
+            endpoint.TrimEnd('/'), model,
+            Parse(StationBatch.Text, 25), Parse(StationTimeout.Text, 300), Parse(StationRetries.Text, 2));
+        error = string.Empty;
+        return true;
+    }
+
+    private JsonObject StationJson(StationSettings s) => new()
+    {
+        ["kind"] = "ollama",
+        ["endpoint"] = s.Endpoint,
+        ["model"] = s.Model,
+        ["batch"] = s.Batch,
+        ["timeoutSeconds"] = s.Timeout,
+        ["retries"] = s.Retries,
+        ["chunk"] = 200,
+    };
+
+    private void StationSave_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryReadStationFields(out var s, out var error))
+        {
+            StationHint.Text = error;
+            return;
+        }
+        try
+        {
+            var root = JsonNode.Parse(File.ReadAllText(_configPath))?.AsObject()
+                       ?? throw new InvalidDataException("config.json is not an object.");
+            var st = Section(root, "station");
+            st["kind"] = "ollama";
+            st["endpoint"] = s.Endpoint;
+            st["model"] = s.Model;
+            st["batch"] = s.Batch;
+            st["timeoutSeconds"] = s.Timeout;
+            st["retries"] = s.Retries;
+            if (st["chunk"] is null) st["chunk"] = 200;
+            File.WriteAllText(_configPath, root.ToJsonString(WriteOptions));
+            StationHint.Text = "Настройки станции сохранены.";
+        }
+        catch (Exception ex)
+        {
+            StationHint.Text = $"Ошибка сохранения: {ex.Message}";
+        }
+    }
+
+    private bool TryResolveRuntime(out string python, out string toolsDir, out string workDir, out string error)
+    {
+        var baseDir = AppContext.BaseDirectory;
+        toolsDir = Path.Combine(baseDir, "tools");
+        workDir = Path.Combine(baseDir, "station_work");
+        var bundled = Path.Combine(baseDir, "runtime", "python", "python.exe");
+        python = File.Exists(bundled) ? bundled : "python";
+
+        if (!File.Exists(Path.Combine(toolsDir, "station_fill.py")))
+        {
+            error = "Не найден tools\\station_fill.py рядом с программой — переустановите/обновите сборку.";
+            return false;
+        }
+        Directory.CreateDirectory(workDir);
+        error = string.Empty;
+        return true;
+    }
+
+    private async Task RunStation(bool checkOnly)
+    {
+        if (!checkOnly && _repository is null)
+        {
+            StationHint.Text = "База не подключена.";
+            return;
+        }
+        if (!TryReadStationFields(out var settings, out var fieldError))
+        {
+            StationHint.Text = fieldError;
+            return;
+        }
+        if (!TryResolveRuntime(out var python, out var toolsDir, out var workDir, out var runtimeError))
+        {
+            StationHint.Text = runtimeError;
+            return;
+        }
+
+        StationSave_Click(this, new RoutedEventArgs());
+        var stationJson = Path.Combine(workDir, "station.json");
+        File.WriteAllText(stationJson, StationJson(settings).ToJsonString(WriteOptions));
+
+        var argv = new List<string> { "station_fill.py" };
+        if (checkOnly)
+        {
+            argv.AddRange(["--check", "--station", stationJson]);
+        }
+        else
+        {
+            var dbPath = _repository!.Database.DatabasePath;
+            if (!Path.IsPathRooted(dbPath))
+                dbPath = Path.Combine(AppContext.BaseDirectory, dbPath);
+            argv.AddRange(["--db", dbPath, "--station", stationJson, "--work", workDir]);
+            if (int.TryParse(StationLimit.Text?.Trim(), out var limit) && limit > 0)
+                argv.AddRange(["--limit", limit.ToString(CultureInfo.InvariantCulture)]);
+        }
+
+        var env = new Dictionary<string, string>
+        {
+            ["PYTHONPATH"] = toolsDir,
+            ["PYTHONIOENCODING"] = "utf-8",
+            ["PYTHONUTF8"] = "1",
+        };
+
+        _stationLog.Clear();
+        StationLog.Text = string.Empty;
+        StationLogWrap.Visibility = Visibility.Visible;
+        StationProgress.Visibility = checkOnly ? Visibility.Collapsed : Visibility.Visible;
+        StationHint.Text = checkOnly ? "Проверка соединения…" : "Перевод через станцию…";
+        SetStationBusy(true);
+        _stationCts = new CancellationTokenSource();
+
+        try
+        {
+            var code = await StationProcess.RunAsync(
+                python, argv, toolsDir, env,
+                line => Dispatcher.Invoke(() => OnStationLine(line)),
+                line => Dispatcher.Invoke(() => AppendStationLog(line)),
+                _stationCts.Token);
+
+            if (checkOnly)
+                StationHint.Text = code == 0 ? "Станция доступна ✓" : "Станция недоступна — см. лог.";
+            else
+                StationHint.Text = code == 0 ? "Готово. Проверьте во вкладке «Ревью»." : "Завершено с ошибкой — см. лог.";
+        }
+        catch (OperationCanceledException)
+        {
+            StationHint.Text = "Остановлено.";
+        }
+        catch (Exception ex)
+        {
+            AppendStationLog($"Ошибка запуска: {ex.Message}");
+            StationHint.Text = "Не удалось запустить — см. лог.";
+        }
+        finally
+        {
+            SetStationBusy(false);
+            _stationCts?.Dispose();
+            _stationCts = null;
+            if (!checkOnly && _repository is not null)
+                LoadDashboard();
+        }
+    }
+
+    private void StationCheck_Click(object sender, RoutedEventArgs e) => _ = RunStation(checkOnly: true);
+    private void StationRun_Click(object sender, RoutedEventArgs e) => _ = RunStation(checkOnly: false);
+    private void StationStop_Click(object sender, RoutedEventArgs e) => _stationCts?.Cancel();
+
+    private void SetStationBusy(bool busy)
+    {
+        StationRunBtn.IsEnabled = !busy;
+        StationCheckBtn.IsEnabled = !busy;
+        StationStop.IsEnabled = busy;
+    }
+
+    private void OnStationLine(string line)
+    {
+        var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length >= 3 && parts[0] == "PROGRESS"
+            && int.TryParse(parts[1], out var done) && int.TryParse(parts[2], out var total))
+        {
+            var fraction = total > 0 ? Math.Clamp((double)done / total, 0, 1) : 0.0;
+            StationFill.Width = new GridLength(fraction, GridUnitType.Star);
+            StationRest.Width = new GridLength(1 - fraction, GridUnitType.Star);
+            StationPct.Text = fraction.ToString("P0", CultureInfo.CurrentCulture);
+            StationStat.Text = $"{done:N0} / {total:N0}";
+            return;
+        }
+        AppendStationLog(line);
+    }
+
+    private void AppendStationLog(string line)
+    {
+        _stationLog.Add(line);
+        if (_stationLog.Count > 200)
+            _stationLog.RemoveAt(0);
+        StationLog.Text = string.Join("\n", _stationLog);
+        StationLogScroll.ScrollToEnd();
     }
 }

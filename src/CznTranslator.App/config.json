@@ -61,6 +61,16 @@
     "fallbackEnabled": true
   },
 
+  "station": {
+    "kind": "ollama",
+    "endpoint": "http://127.0.0.1:11434",
+    "model": "qwen3:4b",
+    "batch": 25,
+    "timeoutSeconds": 300,
+    "retries": 2,
+    "chunk": 200
+  },
+
   "logging": {
     "level": "Information",
     "directory": "logs"

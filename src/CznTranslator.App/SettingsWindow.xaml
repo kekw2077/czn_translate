@@ -180,6 +180,7 @@
                     <ListBoxItem>▧   Оверлей</ListBoxItem>
                     <ListBoxItem>🔑  Ключ API</ListBoxItem>
                     <ListBoxItem>⚙   Перевод</ListBoxItem>
+                    <ListBoxItem>🖧  Станция</ListBoxItem>
                     <ListBoxItem>✓   Ревью</ListBoxItem>
                     <ListBoxItem>⟳   Обновление</ListBoxItem>
                 </ListBox>
@@ -362,6 +363,73 @@
                                     BorderBrush="{StaticResource Border1}" BorderThickness="1" CornerRadius="9" Padding="12,10">
                                 <ScrollViewer x:Name="TransLogScroll" MaxHeight="170" VerticalScrollBarVisibility="Auto">
                                     <TextBlock x:Name="TransLog" Foreground="#B7C4D4" FontSize="12"
+                                               FontFamily="Cascadia Code, Consolas, monospace" TextWrapping="Wrap"/>
+                                </ScrollViewer>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+                <StackPanel x:Name="PageStation" Visibility="Collapsed">
+                    <TextBlock Style="{StaticResource H1}" Text="Станция перевода"/>
+                    <TextBlock Style="{StaticResource Sub}" Text="Перевод на своей машине (Ollama по Tailscale, модель qwen3:4b, CPU). На станцию уходит только текст с замаскированной разметкой ([0] [1]) — теги, плейсхолдеры и переносы не ломаются. Результат — «mt», проверяется во вкладке «Ревью»."/>
+                    <Border Margin="0,16,0,0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Border1}"
+                            BorderThickness="1" CornerRadius="12" Padding="18">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource FieldLabel}" Text="Адрес станции (Tailscale), напр. http://100.x.y.z:11434"/>
+                            <TextBox x:Name="StationEndpoint"/>
+                            <UniformGrid Columns="2" Margin="0,12,0,0">
+                                <StackPanel Margin="0,0,10,0">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Модель"/>
+                                    <TextBox x:Name="StationModel"/>
+                                </StackPanel>
+                                <StackPanel Margin="10,0,0,0">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Объём (число строк, пусто = все)"/>
+                                    <TextBox x:Name="StationLimit"/>
+                                </StackPanel>
+                            </UniformGrid>
+                            <UniformGrid Columns="3" Margin="0,12,0,0">
+                                <StackPanel Margin="0,0,8,0">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Батч"/>
+                                    <TextBox x:Name="StationBatch"/>
+                                </StackPanel>
+                                <StackPanel Margin="4,0,4,0">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Таймаут, сек"/>
+                                    <TextBox x:Name="StationTimeout"/>
+                                </StackPanel>
+                                <StackPanel Margin="8,0,0,0">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Повторы"/>
+                                    <TextBox x:Name="StationRetries"/>
+                                </StackPanel>
+                            </UniformGrid>
+                            <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                                <Button Style="{StaticResource Ghost}" Content="Сохранить" Click="StationSave_Click"/>
+                                <Button x:Name="StationCheckBtn" Style="{StaticResource Ghost}" Content="Проверить соединение"
+                                        Margin="10,0,0,0" Click="StationCheck_Click"/>
+                                <Button x:Name="StationRunBtn" Style="{StaticResource Btn}" Content="▶ Перевести через станцию"
+                                        Margin="10,0,0,0" Click="StationRun_Click"/>
+                                <Button x:Name="StationStop" Style="{StaticResource Ghost}" Content="■ Стоп" IsEnabled="False"
+                                        Margin="10,0,0,0" Click="StationStop_Click"/>
+                            </StackPanel>
+                            <TextBlock x:Name="StationHint" Foreground="{StaticResource Muted}" Margin="2,12,0,0" TextWrapping="Wrap" Text="—"/>
+                            <StackPanel x:Name="StationProgress" Visibility="Collapsed" Margin="0,16,0,0">
+                                <DockPanel Margin="0,0,0,6">
+                                    <TextBlock x:Name="StationPct" DockPanel.Dock="Right" Foreground="{StaticResource Muted}" FontSize="12" Text="0%"/>
+                                    <TextBlock x:Name="StationStat" Foreground="{StaticResource Muted}" FontSize="12" Text="—"/>
+                                </DockPanel>
+                                <Border Height="10" Background="{StaticResource Panel2}" BorderBrush="{StaticResource Border1}" BorderThickness="1" CornerRadius="6">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition x:Name="StationFill" Width="0*"/>
+                                            <ColumnDefinition x:Name="StationRest" Width="1*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0" Background="{StaticResource Accent}" CornerRadius="6"/>
+                                    </Grid>
+                                </Border>
+                            </StackPanel>
+                            <Border x:Name="StationLogWrap" Visibility="Collapsed" Margin="0,14,0,0" Background="#0B1119"
+                                    BorderBrush="{StaticResource Border1}" BorderThickness="1" CornerRadius="9" Padding="12,10">
+                                <ScrollViewer x:Name="StationLogScroll" MaxHeight="170" VerticalScrollBarVisibility="Auto">
+                                    <TextBlock x:Name="StationLog" Foreground="#B7C4D4" FontSize="12"
                                                FontFamily="Cascadia Code, Consolas, monospace" TextWrapping="Wrap"/>
                                 </ScrollViewer>
                             </Border>
