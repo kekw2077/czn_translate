@@ -26,6 +26,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+WHITESPACE = re.compile(r"[ \t]+")
+
 # Order matters and is load-bearing. <...> comes first so that <$shake> is consumed whole;
 # otherwise the '$' inside it opens a keyword match that runs to the next '$' several words
 # later, swallowing a sentence. Keywords also forbid angle brackets internally so an unpaired
@@ -216,3 +218,30 @@ def collect_keywords(sources: list[str]) -> list[str]:
         if is_keyword(match.group(0))
     }
     return sorted(terms)
+
+
+def display_text(raw: str) -> str:
+    """Strips markup down to what a player actually sees on screen.
+
+    Angle tags, ``#var#`` icon references and ``[bracket]`` directives render as nothing, so they
+    go. ``$Keyword$`` renders as its inner word, so the delimiters go and the term stays.
+    ``{0}`` and ``%s`` are left alone: the game substitutes a value there, and showing the
+    placeholder is more informative than silently dropping the number it stands for.
+
+    This is what the overlay stores and draws: it uses its own font, so a literal ``<#FFFBC9>``
+    would appear on screen as those characters, and OCR never sees the markup anyway.
+    """
+    text = LINE_BREAK.sub("\n", raw)
+
+    def replace(match: re.Match[str]) -> str:
+        marker = match.group(0)
+        if is_keyword(marker):
+            return keyword_term(marker)
+        if marker.startswith("{") or marker.startswith("%"):
+            return marker
+        return ""
+
+    text = MARKER.sub(replace, text)
+    text = WHITESPACE.sub(" ", text)
+
+    return "\n".join(line.strip() for line in text.split("\n")).strip()

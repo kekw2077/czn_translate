@@ -17,40 +17,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 
 from czn.db import SRC_MANUAL, SRC_OCR, SRC_PACK, STATUS_MT, STATUS_REVIEWED, Database
 from czn.normalize import has_latin_letters, norm_hash, normalize
-from czn.segment import LINE_BREAK, MARKER, is_keyword, keyword_term
+from czn.segment import display_text
 from czn.validate import validate
-
-WHITESPACE = re.compile(r"[ \t]+")
-
-
-def display_text(raw: str) -> str:
-    """Strips markup down to what a player actually sees on screen.
-
-    Angle tags, ``#var#`` icon references and ``[bracket]`` directives render as nothing, so they
-    go. ``$Keyword$`` renders as its inner word, so the delimiters go and the term stays.
-    ``{0}`` and ``%s`` are left alone: the game substitutes a value there, and showing the
-    placeholder is more informative than silently dropping the number it stands for.
-    """
-    text = LINE_BREAK.sub("\n", raw)
-
-    def replace(match: re.Match[str]) -> str:
-        marker = match.group(0)
-        if is_keyword(marker):
-            return keyword_term(marker)
-        if marker.startswith("{") or marker.startswith("%"):
-            return marker
-        return ""
-
-    text = MARKER.sub(replace, text)
-    text = WHITESPACE.sub(" ", text)
-
-    return "\n".join(line.strip() for line in text.split("\n")).strip()
 
 
 def load_pairs(path: Path) -> dict[str, str]:
