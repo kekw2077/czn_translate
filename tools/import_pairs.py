@@ -1,92 +1,166 @@
 #!/usr/bin/env python3
-"""Loads a flat ``{key: english}`` pairs file into the strings table (TZ §8).
+"""Imports a finished en->ru dictionary (all_ru.json) into the translation base.
 
-    python import_pairs.py --pairs ../extracted/text/en.pairs.json --db ../czn.db \
-        --pack "C:/.../cznlive/data.pack"
+    python import_pairs.py --pairs all_ru.json --db ../czn.db
 
-This is the sibling of ``import_dump.py``. That one walks an AssetRipper JSON export or loose
-SQLite master data; this one takes the already-decoded localization map produced by
-``extracted/scripts/db_decode.py`` — one JSON object of ``key -> English string``. Everything
-downstream (translate.py, the desktop lookup) is identical; only the front door differs.
+This is the shortest route to a working overlay: the pairs already cover the game's text, so no
+AssetRipper export and no database carving is needed for the strings themselves.
 
-Run with the game closed. Idempotent: re-running upserts by key, so a re-rip after a patch
-updates changed strings in place and leaves any human ``ru`` alone (``upsert_string`` keeps the
-existing translation via COALESCE).
+**Markup is stripped by default, and that is deliberate.** all_ru.json keeps the tags because
+they matter for replacing strings inside the game. The overlay is a different consumer: it draws
+the Russian with its own font, so a stored ``<#FFFBC9>`` would appear on screen as those literal
+characters. OCR never sees the markup either — it reads the string the game already rendered. So
+what belongs in the base is display text. Pass --keep-markup for the raw form.
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
-from czn.db import SRC_PACK, STATUS_NEW, Database
+from czn.db import SRC_MANUAL, SRC_OCR, SRC_PACK, STATUS_MT, STATUS_REVIEWED, Database
+from czn.normalize import has_latin_letters, norm_hash, normalize
+from czn.segment import LINE_BREAK, MARKER, is_keyword, keyword_term
+from czn.validate import validate
+
+WHITESPACE = re.compile(r"[ \t]+")
 
 
-def md5_of(path: Path) -> str:
-    digest = hashlib.md5()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+def display_text(raw: str) -> str:
+    """Strips markup down to what a player actually sees on screen.
+
+    Angle tags, ``#var#`` icon references and ``[bracket]`` directives render as nothing, so they
+    go. ``$Keyword$`` renders as its inner word, so the delimiters go and the term stays.
+    ``{0}`` and ``%s`` are left alone: the game substitutes a value there, and showing the
+    placeholder is more informative than silently dropping the number it stands for.
+    """
+    text = LINE_BREAK.sub("\n", raw)
+
+    def replace(match: re.Match[str]) -> str:
+        marker = match.group(0)
+        if is_keyword(marker):
+            return keyword_term(marker)
+        if marker.startswith("{") or marker.startswith("%"):
+            return marker
+        return ""
+
+    text = MARKER.sub(replace, text)
+    text = WHITESPACE.sub(" ", text)
+
+    return "\n".join(line.strip() for line in text.split("\n")).strip()
 
 
 def load_pairs(path: Path) -> dict[str, str]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError(f"{path} is not a JSON object of key -> string")
-    return payload
+        raise ValueError(f"{path} must be an object mapping English to Russian")
+    return {k: v for k, v in payload.items() if isinstance(k, str) and isinstance(v, str)}
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--pairs", required=True, type=Path, help="key->english JSON (from db_decode.py)")
-    parser.add_argument("--db", type=Path, default=Path("czn.db"), help="target SQLite file")
-    parser.add_argument("--table-name", default="text/en", help="stored in strings.table_name for provenance")
-    parser.add_argument("--pack", type=Path, help="data.pack, hashed into pack_versions")
-    parser.add_argument("--note", help="free-form note stored with the pack version")
+    parser.add_argument("--pairs", required=True, type=Path, help="all_ru.json")
+    parser.add_argument("--db", type=Path, default=Path("czn.db"))
+    parser.add_argument("--status", default=STATUS_MT, choices=[STATUS_MT, STATUS_REVIEWED])
+    parser.add_argument("--src", default=SRC_MANUAL, choices=[SRC_MANUAL, SRC_PACK, SRC_OCR])
+    parser.add_argument("--keep-markup", action="store_true", help="store the raw strings, tags and all")
+    parser.add_argument("--keep-identity", action="store_true",
+                        help="also import rows whose Russian is byte-identical to the English")
+    parser.add_argument("--report", type=Path, default=Path("import_pairs_report.json"))
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
-    if not args.pairs.is_file():
-        print(f"{args.pairs} is not a file", file=sys.stderr)
+    if not args.pairs.exists():
+        print(f"{args.pairs} does not exist", file=sys.stderr)
         return 1
 
     pairs = load_pairs(args.pairs)
-    # ``en`` is NOT NULL and an empty string is a useless row that still costs an FTS entry;
-    # drop blanks up front rather than translating whitespace later.
-    usable = {key: text for key, text in pairs.items() if isinstance(text, str) and text.strip()}
-    dropped = len(pairs) - len(usable)
+    print(f"Pairs in {args.pairs.name}: {len(pairs):,}")
+
+    prepare = (lambda s: s) if args.keep_markup else display_text
+
+    rows: dict[int, tuple[str, str]] = {}
+    skipped_identity = skipped_empty = collisions = 0
+    collision_samples: list[dict] = []
+
+    for english, russian in sorted(pairs.items()):
+        en = prepare(english)
+        ru = prepare(russian)
+
+        norm = normalize(en)
+        if not norm or not ru:
+            skipped_empty += 1
+            continue
+
+        # A translation identical to its source is either a legitimate passthrough (a number, a
+        # code) or a translator that gave up and echoed. The second kind would count as coverage
+        # while showing English, which is worse than a clean miss.
+        if en == ru and has_latin_letters(en) and not args.keep_identity:
+            skipped_identity += 1
+            continue
+
+        key = norm_hash(norm)
+        if key in rows:
+            collisions += 1
+            if len(collision_samples) < 20 and rows[key][1] != ru:
+                collision_samples.append({"kept": rows[key], "dropped": [en, ru]})
+            continue
+
+        rows[key] = (en, ru)
+
+    print(f"  usable rows        {len(rows):,}")
+    print(f"  identical to en    {skipped_identity:,}   (use --keep-identity to import anyway)")
+    print(f"  empty after strip  {skipped_empty:,}")
+    print(f"  same normalized key{collisions:>7,}   first one wins")
+
+    flagged = [
+        {"en": en, "ru": ru, "problems": [f.problem.value for f in findings]}
+        for en, ru in rows.values()
+        if (findings := validate(en, ru))
+    ]
+    print(f"  validator findings {len(flagged):,}")
+
+    args.report.write_text(
+        json.dumps({"collisions": collision_samples, "flagged": flagged[:500]},
+                   ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    if args.dry_run:
+        print(f"\nDry run, nothing written. Report -> {args.report}")
+        return 0
 
     database = Database(args.db)
     database.ensure_created()
 
     with database.connect() as connection:
-        pack_md5 = md5_of(args.pack) if args.pack else "unknown"
-        version = database.record_pack_version(connection, pack_md5, args.note)
-
-        inserted = 0
-        for key, english in sorted(usable.items()):
+        for key, (en, ru) in rows.items():
+            # A synthetic key off the normalized hash makes re-runs idempotent: without one,
+            # keyless rows insert afresh every time and the base grows a duplicate per import.
             database.upsert_string(
                 connection,
-                en=english,
-                key=key,
-                table_name=args.table_name,
-                status=STATUS_NEW,
-                src=SRC_PACK,
-                pack_version=version,
+                en=en,
+                ru=ru,
+                key=f"pairs:{key}",
+                table_name=args.pairs.name,
+                status=args.status,
+                src=args.src,
             )
-            inserted += 1
 
-        # One rebuild at the end beats the per-row triggers churning through a bulk load.
         database.rebuild_fts(connection)
+        total = connection.execute("SELECT COUNT(*) FROM strings").fetchone()[0]
 
-    print(f"Imported {inserted} strings from {args.pairs.name} as pack version {version}.")
-    if dropped:
-        print(f"Skipped {dropped} blank value(s).")
-    if args.pack is None:
-        print("No --pack given, so pack_md5 is 'unknown' and patch detection stays off until the next import.")
+    print(f"\n📦 {args.db} — {len(rows):,} row(s) imported, {total:,} in the base")
+    print(f"   status='{args.status}' src='{args.src}'"
+          f"{'' if args.keep_markup else ', markup stripped for display'}")
+    print(f"   report -> {args.report}")
+
+    if args.status == STATUS_MT:
+        print("\n   These sit in the review queue. python review.py --db "
+              f"{args.db} to work through them.")
 
     return 0
 
