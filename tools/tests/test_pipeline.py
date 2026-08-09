@@ -165,12 +165,13 @@ class TestBatchProtocol:
         assert render_glossary({}) == "(пусто)"
 
     def test_system_prompt_formats_with_a_glossary(self):
-        """The prompt is only built inside a real model call, which no stub exercises — so the
-        literal {0}/{value} examples in its rules text must stay escaped or .format() blows up."""
+        """The prompt is only built inside a real model call, which no stub exercises — so the JSON
+        braces in its output spec must stay escaped or .format() blows up on them."""
         rendered = SYSTEM_PROMPT.format(glossary=render_glossary({"Boss": "Босс"}))
         assert "- Boss = Босс" in rendered
-        # The placeholder examples survive as literals for the model to read.
-        assert "{0}" in rendered and "{value}" in rendered
+        # The masking markers and the JSON output spec survive .format() intact.
+        assert "[0]" in rendered
+        assert '"id"' in rendered and '"ru"' in rendered
 
 
 class StubClient:
@@ -178,7 +179,10 @@ class StubClient:
 
     def __init__(self, translate_fn=None, fail=False):
         self.batches = []
-        self._translate = translate_fn or (lambda en: f"[ru] {en}")
+        # Cyrillic prefix, not "[ru]": a bracketed token would read as a masking marker and be
+        # stripped by display_text, so it would not survive the round trip the way a real Russian
+        # translation does.
+        self._translate = translate_fn or (lambda en: f"ру {en}")
         self._fail = fail
 
     def translate_batch(self, items, glossary, attempts=2):
@@ -210,7 +214,7 @@ class TestTranslateScript:
 
         with database.connect() as connection:
             row = database.get_by_key(connection, "a")
-            assert row.ru == "[ru] Blood Pact"
+            assert row.ru == "ру Blood Pact"
             assert row.status == STATUS_MT
 
     def test_memory_short_circuits_the_model(self, monkeypatch, db_path):
@@ -256,7 +260,7 @@ class TestTranslateScript:
 
         with database.connect() as connection:
             row = database.get_by_key(connection, "b")
-            assert row.ru == "[ru] Bravo Reforged"
+            assert row.ru == "ру Bravo Reforged"
             assert row.status == STATUS_MT
 
     def test_a_failed_batch_leaves_strings_for_the_next_run(self, monkeypatch, db_path):
@@ -280,19 +284,21 @@ class TestTranslateScript:
         assert self._run(monkeypatch, db_path, client, ["--dry-run"]) == 0
         assert client.batches == []
 
-    def test_a_flawed_translation_is_still_written_for_the_reviewer(self, monkeypatch, db_path):
-        """A wrong translation with a note beside it is more useful than a hole in the base."""
+    def test_a_marker_losing_translation_is_left_for_retry(self, monkeypatch, db_path):
+        """Masking turns a dropped marker into a detectable event: the segment is rejected rather
+        than written, so the row stays pending instead of showing broken markup on screen."""
         database = Database(db_path)
         with database.connect() as connection:
             database.upsert_string(connection, en="Deal {0} damage", key="a")
 
-        # Drops the placeholder, which the validator flags.
+        # "Deal {0} damage" masks to "Deal [0] damage"; this reply drops the [0], so keeps_sentinels
+        # rejects it and the row is never written.
         self._run(monkeypatch, db_path, StubClient(translate_fn=lambda en: "Наносит урон"))
 
         with database.connect() as connection:
             row = database.get_by_key(connection, "a")
-            assert row.ru == "Наносит урон"
-            assert row.status == STATUS_MT
+            assert row.ru is None
+            assert row.status == STATUS_NEW
 
     def test_limit_is_respected(self, monkeypatch, db_path):
         database = Database(db_path)

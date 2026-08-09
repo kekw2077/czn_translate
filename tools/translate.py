@@ -28,6 +28,8 @@ import yaml
 from czn.apiclient import ApiClient
 from czn.db import STATUS_MT, STATUS_NEW, STATUS_REVIEWED, STATUS_STALE, Database
 from czn.ollama import BatchTranslationError, OllamaClient, TranslationItem, chunk
+from czn.segment import display_text, mask_string, rebuild
+from czn.station import keeps_sentinels
 from czn.validate import is_translatable, validate
 
 DEFAULT_GLOSSARY = Path(__file__).resolve().parent / "glossary.yaml"
@@ -91,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     database = Database(args.db)
 
     if args.provider == "ollama":
-        client = OllamaClient(args.endpoint, args.model or "qwen3-loc")
+        client = OllamaClient(args.endpoint, args.model or "qwen3:4b")
     else:
         load_env_file(DEFAULT_ENV)
         key_env = args.api_key_env or KEY_ENV[args.provider]
@@ -118,8 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         pending = list(database.iter_by_status(connection, (STATUS_NEW, STATUS_STALE), args.limit))
         print(f"{len(pending)} string(s) to translate.")
 
-        remaining: list[TranslationItem] = []
-        originals: dict[int, str] = {}
+        remaining: dict[int, str] = {}  # row id -> English, for the rows the model must see
 
         for row in pending:
             if not is_translatable(row.en):
@@ -136,8 +137,7 @@ def main(argv: list[str] | None = None) -> int:
                 memory_hits += 1
                 continue
 
-            remaining.append(TranslationItem(row.id, row.en))
-            originals[row.id] = row.en
+            remaining[row.id] = row.en
 
         connection.commit()
         print(f"Memory covered {memory_hits}, {skipped} untranslatable, {len(remaining)} left for the model.")
@@ -146,39 +146,58 @@ def main(argv: list[str] | None = None) -> int:
             print("Dry run, the model was not called.")
             return 0
 
-        # Collapse identical English to one model call, then fan the answer back to every row
-        # that carried it — the review queue and any human fix still land per row.
-        by_en: dict[str, list[int]] = {}
-        for item in remaining:
-            by_en.setdefault(item.en, []).append(item.id)
-        unique_items = [TranslationItem(id=ids[0], en=en) for en, ids in by_en.items()]
-        if len(unique_items) != len(remaining):
-            print(f"Collapsed {len(remaining)} row(s) to {len(unique_items)} unique string(s).")
+        # Mask the markup out of every string first, so the model only ever sees plain text with
+        # [0] [1] where a colour tag or placeholder was — it cannot damage markup even in principle.
+        # Identical masked segments across rows collapse to a single model call, the same saving the
+        # old whole-string dedup gave, and are fanned back out at rebuild time.
+        masked = {row_id: mask_string(en) for row_id, en in remaining.items()}
 
-        for index, batch in enumerate(chunk(unique_items, args.batch_size), start=1):
+        segment_items: list[TranslationItem] = []
+        seen_segments: dict[str, int] = {}
+        for m in masked.values():
+            for seg in m.segments:
+                if seg.translatable and seg.masked not in seen_segments:
+                    seen_segments[seg.masked] = len(segment_items) + 1
+                    segment_items.append(TranslationItem(seen_segments[seg.masked], seg.masked))
+        id_to_masked = {item.id: item.en for item in segment_items}
+        if segment_items:
+            print(f"{len(remaining)} row(s) -> {len(segment_items)} unique segment(s) for the model.")
+
+        segments: dict[str, str] = {}
+        for index, batch in enumerate(chunk(segment_items, args.batch_size), start=1):
             try:
                 results = client.translate_batch(batch, glossary)
             except BatchTranslationError as error:
-                # The whole batch is retried inside the client; if it still fails the strings are
-                # left as-is so the next run picks them up rather than writing partial output.
+                # The whole batch is retried inside the client; if it still fails the segments are
+                # left out, so their rows stay pending for the next run rather than half-written.
                 failed_batches += 1
                 print(f"  batch {index} failed: {error}", file=sys.stderr)
                 continue
 
-            for rep_id, russian in results.items():
-                english = originals[rep_id]
-                if validate(english, russian):
-                    flagged += len(by_en[english])
+            for seg_id, russian in results.items():
+                source = id_to_masked[seg_id]
+                # A translation that lost a marker is dropped, not written — the same guarantee the
+                # station makes. The segment stays unknown and its row falls back to English.
+                if keeps_sentinels(source, russian):
+                    segments[source] = russian
+            print(f"  batch {index}: {len(results)} segment(s)")
 
-                # Everything the model produced lands as 'mt', which is the review queue.
-                # A failed check does not block the write — a flawed translation with a note
-                # beside it is more useful to a reviewer than a hole.
-                for string_id in by_en[english]:
-                    database.set_translation(connection, string_id, russian, STATUS_MT)
-                    translated += 1
+        # Rebuild each row from the translated segments, put the markup back, then strip it to the
+        # display text the overlay draws. Only rows with at least one translated segment are written;
+        # keywords ($Shield$) stay as their English term (see station_fill for why).
+        for row_id, m in masked.items():
+            if not any(seg.masked in segments for seg in m.translatable_segments):
+                continue
+            text, _ = rebuild(m, segments)
+            ru = display_text(text)
+            if not ru:
+                continue
+            if validate(remaining[row_id], text):
+                flagged += 1
+            database.set_translation(connection, row_id, ru, STATUS_MT)
+            translated += 1
 
-            connection.commit()
-            print(f"  batch {index}: {len(results)} unique translated")
+        connection.commit()
 
     print(
         f"Done. memory {memory_hits}, model {translated}, untranslatable {skipped}, "
