@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -35,16 +36,20 @@ SYSTEM_PROMPT = """Ты профессиональный переводчик и
 потом появятся элементы оформления.
 
 Правила:
+• Переводи ТОЛЬКО те метки, что уже есть в строке; НИКОГДА не добавляй новых меток
 • КАЖДАЯ метка из строки обязана присутствовать в переводе, ровно один раз, в том же написании
 • Метку можно переставить туда, где её требует русский порядок слов
 • Ничего не дописывай внутрь скобок и не переводи их содержимое
 • Интерфейсные строки — кратко, без точки в конце
 • Диалоги — нормальная пунктуация
 
-Вход: JSON-массив из N строк. Ответ: ТОЛЬКО JSON-массив из N переводов в том же порядке."""
+Вход: JSON-массив из N строк. Ответ: ТОЛЬКО JSON-массив из N переводов в том же порядке,
+той же длины. Без пояснений, без markdown."""
 
 SYSTEM_PROMPT_SINGLE = """Ты профессиональный переводчик игровых интерфейсов EN→RU.
-Переведи одну строку. Метки [0] [1] сохрани дословно, каждую ровно один раз.
+Переведи одну строку с английского на русский.
+Если в строке есть числовые метки в квадратных скобках, сохрани каждую как есть, ровно один раз.
+НИКОГДА не добавляй меток, которых нет во входной строке.
 Ответь ТОЛЬКО переводом, без кавычек и пояснений."""
 
 _FENCE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
@@ -204,29 +209,46 @@ class OllamaStation(Station):
 
         return StationResult(translations, rejected)
 
+    @staticmethod
+    def _log(message: str) -> None:
+        # To stderr so station_fill/the desktop log shows why a batch did or did not land.
+        print(message, file=sys.stderr, flush=True)
+
     def _translate_group(self, group: list[str], sink: dict[str, str]) -> list[str]:
         # Output budget scales with the input; Russian runs longer than English and a truncated
         # reply is unparseable JSON, which would throw away the whole batch.
         predict = max(1024, int(sum(len(s) for s in group) * 1.6))
 
+        raw = None
         parsed = None
         try:
-            parsed = self._parse_array(
-                self._generate(SYSTEM_PROMPT, json.dumps(group, ensure_ascii=False), predict),
-                len(group),
-            )
-        except (urllib.error.URLError, TimeoutError):
-            parsed = None
+            raw = self._generate(SYSTEM_PROMPT, json.dumps(group, ensure_ascii=False), predict)
+            parsed = self._parse_array(raw, len(group))
+        except (urllib.error.URLError, TimeoutError) as error:
+            self._log(f"  batch of {len(group)}: request failed — {error}")
 
         failures: list[str] = []
         if parsed is None:
             failures = list(group)
+            if raw is not None:
+                snippet = strip_thinking(raw)[:160].replace("\n", " ")
+                self._log(
+                    f"  batch of {len(group)}: reply was not a JSON array of {len(group)} strings, "
+                    f"falling back to one-by-one. reply≈{snippet!r}"
+                )
         else:
+            kept = 0
             for source, translated in zip(group, parsed):
                 if translated.strip() and keeps_sentinels(source, translated):
                     sink[source] = translated.strip()
+                    kept += 1
                 else:
                     failures.append(source)
+            if failures:
+                self._log(
+                    f"  batch of {len(group)}: {kept} kept, {len(failures)} changed a marker — "
+                    "retrying those one-by-one"
+                )
 
         # One at a time for whatever the batch could not manage. Short segments dominate, so this
         # is cheap and recovers most of the tail.
@@ -243,6 +265,8 @@ class OllamaStation(Station):
             else:
                 still_bad.append(source)
 
+        if still_bad:
+            self._log(f"  {len(still_bad)} segment(s) could not be translated (marker kept wrong every time)")
         return still_bad
 
 
