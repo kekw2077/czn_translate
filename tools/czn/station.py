@@ -49,6 +49,20 @@ SYSTEM_PROMPT_SINGLE = """Ты профессиональный переводч
 
 _FENCE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
 
+# Reasoning models (qwen3 among them) emit a <think>...</think> block before the answer. It is slow
+# to generate on CPU and its prose is full of brackets, so it wrecks the JSON-array extraction. We
+# ask the model to skip it (think=False on the request) and strip it here as a belt-and-braces.
+_THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def strip_thinking(text: str) -> str:
+    """Drops a <think>...</think> block, and any stray opener that never closed."""
+    text = _THINK.sub("", text)
+    lead = text.lower().find("<think>")
+    if lead != -1 and "</think>" not in text.lower():
+        text = text[:lead]
+    return text.strip()
+
 
 def sentinels(text: str) -> list[str]:
     """Sorted marker indices in a string — the thing that must match between source and result."""
@@ -100,12 +114,15 @@ class OllamaStation(Station):
         batch: int = 25,
         timeout: float = 300.0,
         retries: int = 2,
+        num_thread: int | None = None,
     ) -> None:
         self.endpoint = endpoint.rstrip("/")
         self.model = model
         self.batch = max(1, batch)
         self.timeout = timeout
         self.retries = max(1, retries)
+        # None lets Ollama pick; set it to the core count to push a CPU box to full utilisation.
+        self.num_thread = num_thread
 
     def describe(self) -> str:
         return f"Ollama {self.model} at {self.endpoint} (batch {self.batch})"
@@ -127,18 +144,23 @@ class OllamaStation(Station):
         return True, f"reachable, {len(available)} model(s) installed"
 
     def _generate(self, system: str, prompt: str, predict: int) -> str:
+        options: dict = {"temperature": 0.1, "num_predict": predict}
+        if self.num_thread:
+            options["num_thread"] = self.num_thread
+
+        payload = {
+            "model": self.model,
+            "system": system,
+            "prompt": prompt,
+            "stream": False,
+            # Turn off reasoning for models that support it (qwen3). Ollama ignores the field for
+            # models that do not, so it is safe to always send.
+            "think": False,
+            "options": options,
+        }
         request = urllib.request.Request(
             f"{self.endpoint}/api/generate",
-            data=json.dumps(
-                {
-                    "model": self.model,
-                    "system": system,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {"temperature": 0.1, "num_predict": predict},
-                },
-                ensure_ascii=False,
-            ).encode("utf-8"),
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -148,7 +170,7 @@ class OllamaStation(Station):
 
     @staticmethod
     def _parse_array(raw: str, expected: int) -> list[str] | None:
-        text = raw.strip()
+        text = strip_thinking(raw)
         fenced = _FENCE.match(text)
         if fenced:
             text = fenced.group(1)
@@ -210,7 +232,7 @@ class OllamaStation(Station):
         for source in failures:
             for _ in range(self.retries):
                 try:
-                    single = self._generate(SYSTEM_PROMPT_SINGLE, source, 1024).strip().strip('"')
+                    single = strip_thinking(self._generate(SYSTEM_PROMPT_SINGLE, source, 1024)).strip('"')
                 except (urllib.error.URLError, TimeoutError):
                     continue
                 if single and keeps_sentinels(source, single):
@@ -302,12 +324,14 @@ def build_station(settings: dict) -> Station:
     kind = str(settings.get("kind", "ollama")).lower()
 
     if kind == "ollama":
+        num_thread = settings.get("numThread")
         return OllamaStation(
             endpoint=settings.get("endpoint", DEFAULT_ENDPOINT),
             model=settings.get("model", DEFAULT_MODEL),
             batch=int(settings.get("batch", 25)),
             timeout=float(settings.get("timeoutSeconds", 300)),
             retries=int(settings.get("retries", 2)),
+            num_thread=int(num_thread) if num_thread else None,
         )
 
     if kind == "folder":

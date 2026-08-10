@@ -42,6 +42,7 @@ DEFAULT_STATION = {
     "batch": 25,
     "timeoutSeconds": 300,
     "retries": 2,
+    "numThread": 0,
     "chunk": 200,
 }
 

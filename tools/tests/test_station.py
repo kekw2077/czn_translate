@@ -25,6 +25,7 @@ class FakeOllama:
         self.models = list(models)
         self.batch_calls = 0
         self.single_calls = 0
+        self.last_think = "unset"  # records the request's think flag, to prove it is turned off
 
         station = self
 
@@ -58,6 +59,11 @@ class FakeOllama:
 
     def respond(self, request):
         prompt = request["prompt"]
+        self.last_think = request.get("think", "absent")
+
+        # A reasoning model prepends a <think> block whose prose is full of brackets — exactly what
+        # trips the array extraction. The station asks it off and strips it either way.
+        think = "<think>Hmm, [0] is a marker, let me keep it. The list has several items.</think>\n"
 
         # Distinguish by the system prompt, not by the payload: a single segment can itself
         # start with "[0]", which is exactly what a leading-bracket check gets wrong.
@@ -72,14 +78,15 @@ class FakeOllama:
                 items = items[:-1]
             if self.behaviour == "drops-sentinel":
                 return json.dumps([s.replace("[0]", "", 1) for s in items], ensure_ascii=False)
-            return json.dumps([f"РУ {s}" for s in items], ensure_ascii=False)
+            body = json.dumps([f"РУ {s}" for s in items], ensure_ascii=False)
+            return think + body if self.behaviour == "thinks" else body
 
         self.single_calls += 1
         if self.behaviour in ("garbage", "short"):
             return f"РУ {prompt}"
         if self.behaviour == "drops-sentinel":
             return prompt.replace("[0]", "", 1)
-        return f"РУ {prompt}"
+        return (think + f"РУ {prompt}") if self.behaviour == "thinks" else f"РУ {prompt}"
 
     def stop(self):
         self._server.shutdown()
@@ -159,6 +166,24 @@ class TestOllamaStation:
 
         assert result.translations == {}
         assert sorted(result.rejected) == ["a", "b"]
+
+    def test_a_reasoning_block_is_stripped_and_the_batch_still_lands(self, fake):
+        # qwen3 wraps its answer in <think>...</think>; without stripping, every batch would fail.
+        fake.behaviour = "thinks"
+        result = OllamaStation(fake.endpoint, batch=5).translate(["[0] Attack", "Defend"])
+
+        assert result.translations["[0] Attack"] == "РУ [0] Attack"
+        assert result.rejected == []
+        assert fake.single_calls == 0  # the batch parsed on the first try, no fallback needed
+
+    def test_thinking_is_turned_off_on_the_request(self, fake):
+        OllamaStation(fake.endpoint, batch=5).translate(["Attack"])
+        assert fake.last_think is False
+
+    def test_num_thread_is_forwarded_to_the_options(self, fake):
+        # Proxy check: with a healthy fake the batch still lands when num_thread is set.
+        result = OllamaStation(fake.endpoint, batch=5, num_thread=8).translate(["Attack"])
+        assert result.translations == {"Attack": "РУ Attack"}
 
 
 class TestFolderStation:

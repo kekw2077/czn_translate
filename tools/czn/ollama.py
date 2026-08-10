@@ -44,6 +44,10 @@ SYSTEM_PROMPT = """Ты переводчик игровой локализаци
 # Models wrap JSON in a fenced block often enough to be worth handling rather than retrying.
 _FENCE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
 
+# Reasoning models (qwen3) prepend a <think>...</think> block. It is asked off via think=False on
+# the request, and stripped here in case the model emits it anyway.
+_THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
 
 class BatchTranslationError(RuntimeError):
     """The reply could not be turned into id → translation pairs; the batch must be retried."""
@@ -72,7 +76,7 @@ def parse_response(text: str, expected_ids: set[int]) -> dict[int, str]:
     Accepting a partial answer would leave strings silently untranslated, which is
     indistinguishable downstream from strings the model chose to pass through unchanged.
     """
-    stripped = text.strip()
+    stripped = _THINK.sub("", text).strip()
     fenced = _FENCE.match(stripped)
     if fenced:
         stripped = fenced.group(1)
@@ -128,6 +132,8 @@ class OllamaClient:
                     "system": system,
                     "prompt": prompt,
                     "stream": False,
+                    # Off for reasoning models (qwen3); ignored by models without it.
+                    "think": False,
                     # Localization wants repeatability across runs, not variety.
                     "options": {"temperature": 0.2},
                 },

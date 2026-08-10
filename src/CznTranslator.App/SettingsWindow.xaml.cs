@@ -731,7 +731,7 @@ public partial class SettingsWindow : Window
     private CancellationTokenSource? _stationCts;
     private readonly List<string> _stationLog = [];
 
-    private sealed record StationSettings(string Endpoint, string Model, int Batch, int Timeout, int Retries);
+    private sealed record StationSettings(string Endpoint, string Model, int Batch, int Timeout, int Retries, int NumThread);
 
     private void LoadStationFields()
     {
@@ -745,6 +745,7 @@ public partial class SettingsWindow : Window
             StationBatch.Text = (StInt(st, "batch") ?? 25).ToString(CultureInfo.InvariantCulture);
             StationTimeout.Text = (StInt(st, "timeoutSeconds") ?? 300).ToString(CultureInfo.InvariantCulture);
             StationRetries.Text = (StInt(st, "retries") ?? 2).ToString(CultureInfo.InvariantCulture);
+            StationThreads.Text = (StInt(st, "numThread") ?? 0).ToString(CultureInfo.InvariantCulture);
         }
         catch
         {
@@ -753,6 +754,7 @@ public partial class SettingsWindow : Window
             StationBatch.Text = "25";
             StationTimeout.Text = "300";
             StationRetries.Text = "2";
+            StationThreads.Text = "0";
         }
     }
 
@@ -773,7 +775,7 @@ public partial class SettingsWindow : Window
 
     private bool TryReadStationFields(out StationSettings settings, out string error)
     {
-        settings = new StationSettings(StationDefaultEndpoint, StationDefaultModel, 25, 300, 2);
+        settings = new StationSettings(StationDefaultEndpoint, StationDefaultModel, 25, 300, 2, 0);
         var endpoint = StationEndpoint.Text?.Trim() ?? string.Empty;
         if (string.IsNullOrEmpty(endpoint) || !(endpoint.StartsWith("http://") || endpoint.StartsWith("https://")))
         {
@@ -782,9 +784,11 @@ public partial class SettingsWindow : Window
         }
         var model = string.IsNullOrWhiteSpace(StationModel.Text) ? StationDefaultModel : StationModel.Text.Trim();
         int Parse(string? t, int fallback) => int.TryParse(t?.Trim(), out var v) && v > 0 ? v : fallback;
+        // 0 (or blank) means "let Ollama pick", so it is allowed through rather than forced positive.
+        var threads = int.TryParse(StationThreads.Text?.Trim(), out var t) && t > 0 ? t : 0;
         settings = new StationSettings(
             endpoint.TrimEnd('/'), model,
-            Parse(StationBatch.Text, 25), Parse(StationTimeout.Text, 300), Parse(StationRetries.Text, 2));
+            Parse(StationBatch.Text, 25), Parse(StationTimeout.Text, 300), Parse(StationRetries.Text, 2), threads);
         error = string.Empty;
         return true;
     }
@@ -797,6 +801,7 @@ public partial class SettingsWindow : Window
         ["batch"] = s.Batch,
         ["timeoutSeconds"] = s.Timeout,
         ["retries"] = s.Retries,
+        ["numThread"] = s.NumThread,
         ["chunk"] = 200,
     };
 
@@ -818,6 +823,7 @@ public partial class SettingsWindow : Window
             st["batch"] = s.Batch;
             st["timeoutSeconds"] = s.Timeout;
             st["retries"] = s.Retries;
+            st["numThread"] = s.NumThread;
             if (st["chunk"] is null) st["chunk"] = 200;
             File.WriteAllText(_configPath, root.ToJsonString(WriteOptions));
             StationHint.Text = "Настройки станции сохранены.";

@@ -387,18 +387,22 @@
                                     <TextBox x:Name="StationLimit"/>
                                 </StackPanel>
                             </UniformGrid>
-                            <UniformGrid Columns="3" Margin="0,12,0,0">
-                                <StackPanel Margin="0,0,8,0">
+                            <UniformGrid Columns="4" Margin="0,12,0,0">
+                                <StackPanel Margin="0,0,6,0">
                                     <TextBlock Style="{StaticResource FieldLabel}" Text="Батч"/>
                                     <TextBox x:Name="StationBatch"/>
                                 </StackPanel>
-                                <StackPanel Margin="4,0,4,0">
+                                <StackPanel Margin="3,0,3,0">
                                     <TextBlock Style="{StaticResource FieldLabel}" Text="Таймаут, сек"/>
                                     <TextBox x:Name="StationTimeout"/>
                                 </StackPanel>
-                                <StackPanel Margin="8,0,0,0">
+                                <StackPanel Margin="3,0,3,0">
                                     <TextBlock Style="{StaticResource FieldLabel}" Text="Повторы"/>
                                     <TextBox x:Name="StationRetries"/>
+                                </StackPanel>
+                                <StackPanel Margin="6,0,0,0">
+                                    <TextBlock Style="{StaticResource FieldLabel}" Text="Потоки CPU (0=авто)"/>
+                                    <TextBox x:Name="StationThreads"/>
                                 </StackPanel>
                             </UniformGrid>
                             <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
