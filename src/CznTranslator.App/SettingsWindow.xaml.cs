@@ -281,6 +281,45 @@ public partial class SettingsWindow : Window
 
     private void ReviewReload_Click(object sender, RoutedEventArgs e) => LoadReview(0);
 
+    private async void AcceptAll_Click(object sender, RoutedEventArgs e)
+    {
+        if (_repository is null)
+            return;
+
+        var pending = _repository.CountByStatus(StringStatus.MachineTranslated);
+        if (pending == 0)
+        {
+            ReviewTitle.Text = "Очередь пуста — принимать нечего.";
+            return;
+        }
+
+        if (System.Windows.MessageBox.Show(
+                $"Принять все {pending:N0} машинных перевода? Они станут «принято» (reviewed) и уйдут из очереди. "
+                + "В игре и так уже показываются — это отметка, что проверено.",
+                "CZN Translator", System.Windows.MessageBoxButton.OKCancel,
+                System.Windows.MessageBoxImage.Question) != System.Windows.MessageBoxResult.OK)
+            return;
+
+        AcceptAllBtn.IsEnabled = false;
+        ReviewTitle.Text = "Принимаю…";
+        try
+        {
+            var repo = _repository;
+            var accepted = await Task.Run(() => repo.AcceptAllMachineTranslated());
+            ReviewTitle.Text = $"Принято {accepted:N0}.";
+            LoadReview(0);
+            LoadDashboard();
+        }
+        catch (Exception ex)
+        {
+            ReviewTitle.Text = $"Ошибка: {ex.Message}";
+        }
+        finally
+        {
+            AcceptAllBtn.IsEnabled = true;
+        }
+    }
+
     private void LoadReview(int offset)
     {
         ReviewList.Children.Clear();
@@ -511,7 +550,7 @@ public partial class SettingsWindow : Window
 
     private void TransStop_Click(object sender, RoutedEventArgs e) => _translateCts?.Cancel();
 
-    private void Import_Click(object sender, RoutedEventArgs e)
+    private async void Import_Click(object sender, RoutedEventArgs e)
     {
         if (_repository is null)
         {
@@ -527,22 +566,41 @@ public partial class SettingsWindow : Window
         if (dialog.ShowDialog() != true)
             return;
 
+        ImportHint.Text = "Чтение файла…";
+        Dictionary<string, string>? map;
         try
         {
-            var map = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(dialog.FileName));
-            if (map is null || map.Count == 0)
-            {
-                ImportHint.Text = "Файл пуст или не в формате {english: русский}.";
-                return;
-            }
+            var json = await File.ReadAllTextAsync(dialog.FileName);
+            map = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+        }
+        catch (Exception ex)
+        {
+            ImportHint.Text = $"Не удалось прочитать файл: {ex.Message}";
+            return;
+        }
+        if (map is null || map.Count == 0)
+        {
+            ImportHint.Text = "Файл пуст или не в формате {english: русский}.";
+            return;
+        }
 
-            var applied = _repository.ApplyTranslationsByEnglish(map, StringStatus.MachineTranslated);
-            ImportHint.Text = $"Загружено: {applied:N0} строк (статус mt). Проверьте во вкладке «Ревью».";
+        // Off the UI thread — a big dictionary (tens of thousands of entries) would otherwise freeze
+        // the window for the whole import. Matched by normalized English, like the overlay's lookup.
+        var repo = _repository;
+        var progress = new Progress<(int done, int total, int applied)>(p =>
+            ImportHint.Text = $"Импорт… {p.done:N0}/{p.total:N0}, строк заполнено: {p.applied:N0}");
+        try
+        {
+            var result = await Task.Run(() =>
+                repo.ImportByNormalizedEnglish(map, StringStatus.MachineTranslated, progress));
+            ImportHint.Text =
+                $"Готово. Из {map.Count:N0} записей: обновлено {result.RowsUpdated:N0}, добавлено {result.Inserted:N0}, "
+                + $"пропущено уже принятых {result.Skipped:N0}. Показывается в игре сразу; проверить можно в «Ревью».";
             LoadDashboard();
         }
         catch (Exception ex)
         {
-            ImportHint.Text = $"Ошибка: {ex.Message}";
+            ImportHint.Text = $"Ошибка импорта: {ex.Message}";
         }
     }
 

@@ -14,6 +14,9 @@ public sealed record StringRow(
     StringSource Source,
     int? PackVersion);
 
+/// <summary>Outcome of importing an external dictionary: entries considered, rows written, rows added, rows kept.</summary>
+public readonly record struct ImportResult(int Entries, int RowsUpdated, int Inserted, int Skipped);
+
 /// <summary>
 /// Write access to the <c>strings</c> table. The Python conveyor owns bulk import; this exists
 /// for the desktop side (review edits, LLM write-back) and for tests that need a populated base.
@@ -202,6 +205,120 @@ public sealed class StringRepository(TranslationDatabase database)
 
         transaction.Commit();
         return affected;
+    }
+
+    /// <summary>
+    /// Imports an <c>English → Russian</c> map keyed by NORMALISED English — the same key the OCR
+    /// overlay looks up on — so a dictionary of display text (no markup) still lands on rows whose
+    /// stored English carries markup. For each entry: every row with that norm that is not yet
+    /// human-blessed (new/stale/mt) gets the translation; an entry that matches no row at all is
+    /// inserted so the overlay can still find it; rows already reviewed/locked are left untouched.
+    /// One transaction, reports progress, cancellable.
+    /// </summary>
+    public ImportResult ImportByNormalizedEnglish(
+        IReadOnlyDictionary<string, string> map,
+        StringStatus status,
+        IProgress<(int done, int total, int applied)>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        using var connection = _database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+
+        using var update = connection.CreateCommand();
+        update.CommandText =
+            "UPDATE strings SET ru = $ru, status = $status, updated_at = $now " +
+            "WHERE norm_hash = $h AND norm = $norm AND status IN ('new','stale','mt');";
+        var uNorm = update.Parameters.Add("$norm", SqliteType.Text);
+        var uHash = update.Parameters.Add("$h", SqliteType.Integer);
+        var uRu = update.Parameters.Add("$ru", SqliteType.Text);
+        update.Parameters.AddWithValue("$status", ToDb(status));
+        update.Parameters.AddWithValue("$now", now);
+
+        using var exists = connection.CreateCommand();
+        exists.CommandText = "SELECT 1 FROM strings WHERE norm_hash = $h AND norm = $norm LIMIT 1;";
+        var eNorm = exists.Parameters.Add("$norm", SqliteType.Text);
+        var eHash = exists.Parameters.Add("$h", SqliteType.Integer);
+
+        using var insert = connection.CreateCommand();
+        insert.CommandText =
+            "INSERT INTO strings (key, table_name, en, ru, norm, norm_hash, status, src, pack_version, updated_at) " +
+            "VALUES ($key, NULL, $en, $ru, $norm, $h, $status, 'manual', NULL, $now) " +
+            "ON CONFLICT(key) WHERE key IS NOT NULL DO UPDATE SET " +
+            "ru = excluded.ru, status = excluded.status, updated_at = excluded.updated_at;";
+        var iKey = insert.Parameters.Add("$key", SqliteType.Text);
+        var iEn = insert.Parameters.Add("$en", SqliteType.Text);
+        var iRu = insert.Parameters.Add("$ru", SqliteType.Text);
+        var iNorm = insert.Parameters.Add("$norm", SqliteType.Text);
+        var iHash = insert.Parameters.Add("$h", SqliteType.Integer);
+        insert.Parameters.AddWithValue("$status", ToDb(status));
+        insert.Parameters.AddWithValue("$now", now);
+
+        int entries = 0, rowsUpdated = 0, inserted = 0, skipped = 0, done = 0;
+        var total = map.Count;
+
+        foreach (var (english, russian) in map)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            done++;
+
+            var ru = russian?.Trim();
+            if (!string.IsNullOrEmpty(english) && !string.IsNullOrEmpty(ru))
+            {
+                var norm = TextNormalizer.Normalize(english);
+                if (norm.Length > 0)
+                {
+                    entries++;
+                    var h = NormHash.ComputeSigned(norm);
+
+                    uNorm.Value = norm;
+                    uHash.Value = h;
+                    uRu.Value = ru;
+                    var n = update.ExecuteNonQuery();
+                    if (n > 0)
+                    {
+                        rowsUpdated += n;
+                    }
+                    else
+                    {
+                        eNorm.Value = norm;
+                        eHash.Value = h;
+                        if (exists.ExecuteScalar() is null)
+                        {
+                            iKey.Value = $"import:{h}";
+                            iEn.Value = english;
+                            iRu.Value = ru;
+                            iNorm.Value = norm;
+                            iHash.Value = h;
+                            insert.ExecuteNonQuery();
+                            inserted++;
+                        }
+                        else
+                        {
+                            skipped++; // this norm exists only as reviewed/locked — keep the human text
+                        }
+                    }
+                }
+            }
+
+            if (done % 1000 == 0)
+                progress?.Report((done, total, rowsUpdated + inserted));
+        }
+
+        transaction.Commit();
+        progress?.Report((total, total, rowsUpdated + inserted));
+        return new ImportResult(entries, rowsUpdated, inserted, skipped);
+    }
+
+    /// <summary>Promotes every machine-translated ('mt') row to 'reviewed' in one statement. Returns the count.</summary>
+    public int AcceptAllMachineTranslated()
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE strings SET status = 'reviewed', updated_at = $now WHERE status = 'mt';";
+        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        return command.ExecuteNonQuery();
     }
 
     /// <summary>Writes a translation and moves the row's status (review accept, or a model write-back).</summary>

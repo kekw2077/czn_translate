@@ -448,6 +448,8 @@
                         <StackPanel>
                             <DockPanel Margin="0,0,0,12">
                                 <Button Style="{StaticResource Ghost}" Content="Обновить" DockPanel.Dock="Right" Click="ReviewReload_Click"/>
+                                <Button x:Name="AcceptAllBtn" Style="{StaticResource Ghost}" Content="Принять все" DockPanel.Dock="Right"
+                                        Margin="0,0,8,0" Click="AcceptAll_Click"/>
                                 <TextBlock x:Name="ReviewTitle" Foreground="{StaticResource Text1}" FontWeight="Bold" FontSize="14"
                                            VerticalAlignment="Center" Text="Очередь"/>
                             </DockPanel>
