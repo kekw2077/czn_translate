@@ -802,7 +802,7 @@ public partial class SettingsWindow : Window
         ["timeoutSeconds"] = s.Timeout,
         ["retries"] = s.Retries,
         ["numThread"] = s.NumThread,
-        ["chunk"] = 200,
+        ["chunk"] = 100,
     };
 
     private void StationSave_Click(object sender, RoutedEventArgs e)
@@ -824,7 +824,7 @@ public partial class SettingsWindow : Window
             st["timeoutSeconds"] = s.Timeout;
             st["retries"] = s.Retries;
             st["numThread"] = s.NumThread;
-            if (st["chunk"] is null) st["chunk"] = 200;
+            if (st["chunk"] is null) st["chunk"] = 100;
             File.WriteAllText(_configPath, root.ToJsonString(WriteOptions));
             StationHint.Text = "Настройки станции сохранены.";
         }
@@ -912,8 +912,13 @@ public partial class SettingsWindow : Window
                 line => Dispatcher.Invoke(() => AppendStationLog(line)),
                 _stationCts.Token);
 
+            // Stop kills the child, which exits non-zero — that is a stop, not a failure. Rows are
+            // written continuously, so whatever finished before the stop is already in the base.
+            var stopped = _stationCts.IsCancellationRequested;
             if (checkOnly)
                 StationHint.Text = code == 0 ? "Станция доступна ✓" : "Станция недоступна — см. лог.";
+            else if (stopped)
+                StationHint.Text = "Остановлено. Переведённое сохранено — можно продолжить позже.";
             else
                 StationHint.Text = code == 0 ? "Готово. Проверьте во вкладке «Ревью»." : "Завершено с ошибкой — см. лог.";
         }

@@ -43,7 +43,7 @@ DEFAULT_STATION = {
     "timeoutSeconds": 300,
     "retries": 2,
     "numThread": 0,
-    "chunk": 200,
+    "chunk": 100,
 }
 
 
@@ -103,11 +103,13 @@ def translate_into(
     done_before: int,
     total: int,
     progress,
+    after_chunk=None,
 ) -> tuple[int, list[str]]:
     """Feeds ``todo`` to the station in chunks, folding results into ``memory`` and flushing it.
 
-    Returns the running done-count and whatever the station could not translate. Flushing per
-    chunk means an interrupted run keeps everything it had already earned.
+    Returns the running done-count and whatever the station could not translate. Flushing the memory
+    and running ``after_chunk`` per chunk means an interrupted run keeps everything it had already
+    earned — both the translated segments and the rows written from them.
     """
     done = done_before
     rejected: list[str] = []
@@ -121,57 +123,49 @@ def translate_into(
 
         done += len(group)
         progress(f"PROGRESS {done} {total}")
+        if after_chunk is not None:
+            after_chunk()
 
     return done, rejected
 
 
-def apply_rows(
-    connection: sqlite3.Connection,
-    rows: list[sqlite3.Row],
-    segments: dict[str, str],
-    glossary: dict[str, str],
-) -> tuple[int, int, int, list[dict]]:
-    """Rebuilds each row's Russian from the memory and writes the covered ones as ``mt``.
+def apply_covered(connection, masked_rows, segments, glossary, done_ids, written_ids) -> None:
+    """Writes every not-yet-finalised row whose segments are (at least partly) translated, as ``mt``.
 
-    A row is only touched when at least one of its translatable segments came back, so a string the
-    station could not manage is left ``new`` for the next pass rather than being marked done.
+    Called repeatedly as more segments arrive, and committed each time, so progress lands in the base
+    continuously and an interrupted run keeps what it had. A row is finalised (added to ``done_ids``,
+    never revisited) once all its translatable segments are covered; a partly covered row is written
+    now and revisited, so a later run completes it. ``written_ids`` accumulates every row that has a
+    translation, for the final count.
 
-    Keywords (``$Shield$``) are resolved through ``glossary``: a translated term is substituted and
+    Keywords (``$Shield$``) resolve through ``glossary``: a translated term is substituted and
     ``display_text`` strips it to its inner word regardless of script (``$Щит$`` -> ``Щит``); a term
     with no translation falls back to English (``$Shield$`` -> ``Shield``).
     """
-    written = partial = untouched = 0
-    problems: list[dict] = []
     now = int(time.time())
+    for row_id, masked, translatable in masked_rows:
+        if row_id in done_ids:
+            continue
+        if not translatable:
+            done_ids.add(row_id)  # pure markup/number — never coverable, never revisit
+            continue
 
-    for row in rows:
-        source = row["en"]
-        masked = mask_string(source)
-        translatable = masked.translatable_segments
         covered = sum(1 for s in translatable if s.masked in segments)
-
-        if not translatable or covered == 0:
-            untouched += 1
+        if covered == 0:
             continue
 
-        text, issues = rebuild(masked, segments, glossary)
+        text, _ = rebuild(masked, segments, glossary)
         ru = display_text(text)
-        if issues:
-            problems.append({"en": source, "ru": ru, "issues": issues})
-        if not ru:
-            untouched += 1
-            continue
-
-        connection.execute(
-            "UPDATE strings SET ru = ?, status = ?, updated_at = ? WHERE id = ?",
-            (ru, STATUS_MT, now, row["id"]),
-        )
-        written += 1
-        if covered < len(translatable):
-            partial += 1
+        if ru:
+            connection.execute(
+                "UPDATE strings SET ru = ?, status = ?, updated_at = ? WHERE id = ?",
+                (ru, STATUS_MT, now, row_id),
+            )
+            written_ids.add(row_id)
+        if covered == len(translatable):
+            done_ids.add(row_id)
 
     connection.commit()
-    return written, partial, untouched, problems
 
 
 def fill(
@@ -187,6 +181,10 @@ def fill(
     sources = [row["en"] for row in rows]
     progress(f"Pending rows: {len(rows):,}")
 
+    # Mask every row once, up front: the apply pass runs after every chunk, so recomputing the mask
+    # and the translatable-segment list each time would dominate. (id, MaskedString, translatable).
+    masked_rows = [(row["id"], m, m.translatable_segments) for row in rows for m in (mask_string(row["en"]),)]
+
     seg_path = work / "segments_ru.json"
     glo_path = work / "glossary_ru.json"
     segments = load_memory(seg_path)
@@ -201,44 +199,51 @@ def fill(
     )
     progress(f"PROGRESS 0 {max(total, 1)}")
 
+    done_ids: set[int] = set()
+    written_ids: set[int] = set()
+
+    def apply_now() -> None:
+        apply_covered(connection, masked_rows, segments, glossary, done_ids, written_ids)
+
     done = 0
     rejected: list[str] = []
-    # Keywords first: they are plain words, so they translate fast and the segment pass can then
-    # reuse them. A term that comes back empty or with a stray marker is left English.
+    # Keywords first: they are plain words, they translate fast, and rows that carry them need the
+    # glossary before they are rebuilt. A term that comes back empty or mangled is left English.
     if todo_terms:
         done, term_rejected = translate_into(
-            station, todo_terms, glossary, glo_path, chunk, done, total, progress
+            station, todo_terms, glossary, glo_path, chunk, done, total, progress,
+            after_chunk=apply_now,  # on a resume, rows whose segments are already known land now
         )
         rejected.extend(term_rejected)
+    # Segments: apply after each chunk so rows land in the base as they are translated — a stop or a
+    # crash keeps everything already written, and the dashboard moves during a long run.
     if todo_segments:
         done, seg_rejected = translate_into(
-            station, todo_segments, segments, seg_path, chunk, done, total, progress
+            station, todo_segments, segments, seg_path, chunk, done, total, progress,
+            after_chunk=apply_now,
         )
         rejected.extend(seg_rejected)
 
+    apply_now()  # final pass: the all-in-memory case, and finalising any partials
     progress(f"PROGRESS {max(total, 1)} {max(total, 1)}")
-
-    written, partial, untouched, problems = apply_rows(connection, rows, segments, glossary)
 
     if rejected:
         (work / "station_failed.txt").write_text("\n".join(rejected) + "\n", encoding="utf-8")
-    if problems:
-        (work / "station_report.json").write_text(
-            json.dumps(problems[:500], ensure_ascii=False, indent=2), encoding="utf-8"
-        )
 
+    written = len(written_ids)
+    partial = len(written_ids - done_ids)
     stats = {
         "rows": len(rows),
         "written": written,
         "partial": partial,
-        "untouched": untouched,
+        "untouched": len(rows) - written,
         "rejected": len(rejected),
         "segments": len(segments),
         "terms": len(glossary),
     }
     progress(
         f"Wrote {written:,} row(s) as '{STATUS_MT}' "
-        f"({partial:,} partial, {untouched:,} left for later, {len(rejected):,} rejected)."
+        f"({partial:,} partial, {len(rows) - written:,} left for later, {len(rejected):,} rejected)."
     )
     return stats
 
