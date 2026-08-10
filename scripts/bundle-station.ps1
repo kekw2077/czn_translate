@@ -28,11 +28,13 @@ $toolsDst = Join-Path $Deploy "tools"
 $cznDst = Join-Path $toolsDst "czn"
 New-Item -ItemType Directory -Force -Path $cznDst | Out-Null
 
-Copy-Item (Join-Path $toolsSrc "station_fill.py") $toolsDst -Force
+foreach ($s in @("station_fill.py", "station_probe.py")) {
+    Copy-Item (Join-Path $toolsSrc $s) $toolsDst -Force
+}
 foreach ($m in @("__init__.py", "segment.py", "station.py")) {
     Copy-Item (Join-Path $toolsSrc "czn\$m") $cznDst -Force
 }
-Write-Host "tools -> $toolsDst (station_fill.py + czn.segment/station)"
+Write-Host "tools -> $toolsDst (station_fill.py + station_probe.py + czn.segment/station)"
 
 # --- 2. the embeddable Python runtime -------------------------------------------
 $runtime = Join-Path $Deploy "runtime\python"
