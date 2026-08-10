@@ -125,7 +125,14 @@ class TestOllamaStation:
     def test_check_reports_a_missing_model(self, fake):
         ok, detail = OllamaStation(fake.endpoint, model="llama-nonexistent").check()
         assert not ok
-        assert "not present" in detail
+        assert "not installed" in detail
+
+    def test_check_rejects_a_family_match_that_is_not_the_exact_tag(self, fake):
+        # 'qwen2.5:7b' is the same family as the installed 'qwen2.5:7b-instruct' but a different tag,
+        # so generation would 404 — the check must fail rather than wave it through.
+        ok, detail = OllamaStation(fake.endpoint, model="qwen2.5:7b").check()
+        assert not ok
+        assert "qwen2.5:7b-instruct" in detail  # the installed tags are listed for the user
 
     def test_translates_a_batch(self, fake):
         result = OllamaStation(fake.endpoint, batch=10).translate(["[0] Attack", "Defend"])

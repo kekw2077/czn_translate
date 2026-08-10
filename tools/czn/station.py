@@ -137,11 +137,13 @@ class OllamaStation(Station):
             return False, f"bad response: {error}"
 
         available = [m.get("name", "") for m in payload.get("models", [])]
-        if not any(self.model.split(":")[0] in name for name in available):
-            listing = ", ".join(available[:8]) or "none"
-            return False, f"model '{self.model}' not present. Available: {listing}"
+        # Ollama needs the EXACT tag to generate — a family match ('qwen3' in 'qwen3:4b-instruct')
+        # passes the check and then every /api/generate 404s. Accept the ':latest' shorthand only.
+        if self.model not in available and f"{self.model}:latest" not in available:
+            listing = ", ".join(available) or "none"
+            return False, f"model '{self.model}' is not installed — use the exact tag. Installed: {listing}"
 
-        return True, f"reachable, {len(available)} model(s) installed"
+        return True, f"reachable, model '{self.model}' present"
 
     def _generate(self, system: str, prompt: str, predict: int) -> str:
         options: dict = {"temperature": 0.1, "num_predict": predict}

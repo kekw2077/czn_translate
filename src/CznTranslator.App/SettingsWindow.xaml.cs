@@ -916,7 +916,7 @@ public partial class SettingsWindow : Window
             // written continuously, so whatever finished before the stop is already in the base.
             var stopped = _stationCts.IsCancellationRequested;
             if (checkOnly)
-                StationHint.Text = code == 0 ? "Станция доступна ✓" : "Станция недоступна — см. лог.";
+                StationHint.Text = code == 0 ? "Станция доступна ✓" : "Станция или модель недоступна — см. лог.";
             else if (stopped)
                 StationHint.Text = "Остановлено. Переведённое сохранено — можно продолжить позже.";
             else
