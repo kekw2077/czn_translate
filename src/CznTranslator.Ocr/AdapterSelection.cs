@@ -13,6 +13,10 @@ public sealed record BackendDecision(OcrProviderKind Kind, GraphicsAdapter? Adap
 /// </summary>
 public static class AdapterSelection
 {
+    // Below this much dedicated VRAM an adapter is treated as integrated. Integrated GPUs report a
+    // few hundred MB; discrete cards report gigabytes, so 1 GiB cleanly separates the two.
+    private const ulong IntegratedVramCeiling = 1UL * 1024 * 1024 * 1024;
+
     public static BackendDecision Decide(OcrSection settings, IReadOnlyList<GraphicsAdapter> adapters)
     {
         ArgumentNullException.ThrowIfNull(settings);
@@ -65,6 +69,22 @@ public static class AdapterSelection
         if (usable.Count > 0)
         {
             var chosen = usable[0];
+
+            // Integrated GPUs report a tiny dedicated pool. For this small OCR model DirectML on
+            // one is actually SLOWER than the CPU execution provider (measured ~3x on Iris Xe),
+            // and it steals the very GPU the game renders on — the overlay would stutter the game.
+            // A discrete card (gigabytes dedicated) wins on DirectML, so only steer to CPU when the
+            // best adapter is clearly integrated and the choice is ours (auto, not a pinned dml).
+            if (settings.Provider == OcrProviderKind.Auto && chosen.DedicatedVideoMemory < IntegratedVramCeiling)
+            {
+                return new BackendDecision(
+                    OcrProviderKind.Cpu,
+                    null,
+                    $"{prefix}Best adapter #{chosen.Index} ({chosen.Description}) is integrated " +
+                    $"({chosen.DedicatedVideoMemory / (1024 * 1024)} MB dedicated); the CPU provider is faster for OCR " +
+                    "here and leaves the GPU to the game.");
+            }
+
             return new BackendDecision(
                 OcrProviderKind.DirectMl,
                 chosen,

@@ -350,14 +350,26 @@ public class AdapterSelectionTests
     }
 
     [Fact]
-    public void The_laptop_igpu_is_selected_when_it_is_the_only_adapter()
+    public void The_laptop_igpu_defers_to_the_cpu()
     {
-        // Iris Xe supports DirectML fully, so the cascade stops here and CpuOcrBackend stays
-        // unused — TZ §12.
+        // Measured ~3x faster on the CPU for this small model on an Iris Xe, and DirectML there
+        // steals the GPU the game renders on. So auto steers to the CPU when the only adapter is
+        // integrated (tiny dedicated VRAM).
         var decision = AdapterSelection.Decide(new OcrSection(), [Adapter(0, "Intel Iris Xe Graphics", 128)]);
 
+        Assert.Equal(OcrProviderKind.Cpu, decision.Kind);
+        Assert.Null(decision.Adapter);
+    }
+
+    [Fact]
+    public void A_pinned_dml_provider_still_uses_an_integrated_gpu()
+    {
+        // The integrated heuristic is auto-only; pinning dml is the user overriding it on purpose.
+        var decision = AdapterSelection.Decide(
+            new OcrSection { Provider = OcrProviderKind.DirectMl },
+            [Adapter(0, "Intel Iris Xe Graphics", 128)]);
+
         Assert.Equal(OcrProviderKind.DirectMl, decision.Kind);
-        Assert.Equal("Intel Iris Xe Graphics", decision.Adapter!.Description);
     }
 
     [Fact]
@@ -396,9 +408,11 @@ public class AdapterSelectionTests
     public void A_stale_pinned_index_degrades_to_automatic_selection_in_auto_mode()
     {
         // Moving a card or a driver reshuffle changes indices; that should not brick startup.
+        // A discrete card here so automatic selection lands on DirectML (an integrated one would
+        // legitimately steer to the CPU, which is a different test).
         var decision = AdapterSelection.Decide(
             new OcrSection { AdapterIndex = 7 },
-            [Adapter(0, "Intel Iris Xe Graphics", 128)]);
+            [Adapter(0, "NVIDIA GeForce RTX 4070", 12288)]);
 
         Assert.Equal(OcrProviderKind.DirectMl, decision.Kind);
         Assert.Equal(0, decision.Adapter!.Index);
