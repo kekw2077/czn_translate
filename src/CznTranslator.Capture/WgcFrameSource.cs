@@ -278,19 +278,53 @@ public sealed class WgcFrameSource : IFrameSource
         nint CreateForMonitor([In] nint monitor, [In] ref Guid iid);
     }
 
+    // The default interface of GraphicsCaptureItem — CreateForWindow QIs the new item for it.
+    private static readonly Guid GraphicsCaptureItemIid = new("79C3F95B-31F7-4EC2-A464-632EF5D30760");
+    private static readonly Guid GraphicsCaptureItemInteropIid = new("3628E81B-3CAC-4C60-B7F4-23CE0E0C3356");
+
+    [DllImport("combase.dll")]
+    private static extern int RoGetActivationFactory(nint activatableClassId, [In] ref Guid iid, out nint factory);
+
+    [DllImport("combase.dll", CharSet = CharSet.Unicode)]
+    private static extern int WindowsCreateString([MarshalAs(UnmanagedType.LPWStr)] string sourceString, int length, out nint hstring);
+
+    [DllImport("combase.dll")]
+    private static extern int WindowsDeleteString(nint hstring);
+
     private static GraphicsCaptureItem CreateItemForWindow(nint hwnd)
     {
-        var interop = GraphicsCaptureItem.As<IGraphicsCaptureItemInterop>();
-        var iid = typeof(GraphicsCaptureItem).GUID;
-        var pointer = interop.CreateForWindow(hwnd, ref iid);
-
+        // Ask WinRT for the GraphicsCaptureItem activation factory as the classic interop interface
+        // directly. Going through CsWinRT's As<>() on a [ComImport] interface builds a wrapper whose
+        // vtable does not line up, and the first call throws InvalidCastException — which is exactly
+        // what killed the pipeline before it drew anything.
+        const string runtimeClass = "Windows.Graphics.Capture.GraphicsCaptureItem";
+        Marshal.ThrowExceptionForHR(WindowsCreateString(runtimeClass, runtimeClass.Length, out var classId));
         try
         {
-            return GraphicsCaptureItem.FromAbi(pointer);
+            var interopIid = GraphicsCaptureItemInteropIid;
+            Marshal.ThrowExceptionForHR(RoGetActivationFactory(classId, ref interopIid, out var factoryPtr));
+            try
+            {
+                var interop = (IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
+                var iid = GraphicsCaptureItemIid;
+                var pointer = interop.CreateForWindow(hwnd, ref iid);
+                try
+                {
+                    return GraphicsCaptureItem.FromAbi(pointer);
+                }
+                finally
+                {
+                    Marshal.Release(pointer);
+                }
+            }
+            finally
+            {
+                Marshal.Release(factoryPtr);
+            }
         }
         finally
         {
-            Marshal.Release(pointer);
+            WindowsDeleteString(classId);
         }
     }
 
